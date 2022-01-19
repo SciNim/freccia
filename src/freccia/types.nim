@@ -1,120 +1,219 @@
+import std/[strformat, strutils]
+
 # From https://arrow.apache.org/docs/format/CDataInterface.html
 
-#[
-  #define ARROW_FLAG_DICTIONARY_ORDERED 1
-  #define ARROW_FLAG_NULLABLE 2
-  #define ARROW_FLAG_MAP_KEYS_SORTED 4
-
-  struct ArrowSchema {
-    // Array type description
-    const char* format;
-    const char* name;
-    const char* metadata;
-    int64_t flags;
-    int64_t n_children;
-    struct ArrowSchema** children;
-    struct ArrowSchema* dictionary;
-
-    // Release callback
-    void (*release)(struct ArrowSchema*);
-    // Opaque producer-specific data
-    void* private_data;
-  };
-
-  struct ArrowArray {
-    // Array data description
-    int64_t length;
-    int64_t null_count;
-    int64_t offset;
-    int64_t n_buffers;
-    int64_t n_children;
-    const void** buffers;
-    struct ArrowArray** children;
-    struct ArrowArray* dictionary;
-
-    // Release callback
-    void (*release)(struct ArrowArray*);
-    // Opaque producer-specific data
-    void* private_data;
-  };
-]#
-
-#[
-
-  # From futhark
-
-  type                                                                                                                                                                                                               
-    Arrowarray_1610612963* = object                                                                                                                                                                                  
-      length*: cint            ## Generated based on /home/jack/nim/freccia/csrc/interface.h:21:8                                                                                                                    
-      nullcount*: cint                                                                                                                                                                                               
-      offset*: cint                                                                                                                                                                                                  
-      nbuffers*: cint                                                                                                                                                                                                
-      nchildren*: cint                                                                                                                                                                                               
-      buffers*: ptr pointer                                                                                                                                                                                          
-      children*: ptr ptr Arrowarray_1610612965                                                                                                                                                                       
-      dictionary*: ptr Arrowarray_1610612965                                                                                                                                                                         
-      release*: proc (a0: ptr Arrowarray_1610612965): void {.cdecl.}                                                                                                                                                 
-      privatedata*: pointer                                                                                                                                                                                          
-                                                                                                                                                                                                                    
-    Arrowschema_1610612966* = object                                                                                                                                                                                 
-      format*: cstring         ## Generated based on /home/jack/nim/freccia/csrc/interface.h:5:8                                                                                                                     
-      name*: cstring                                                                                                                                                                                                 
-      metadata*: cstring                                                                                                                                                                                             
-      flags*: cint                                                                                                                                                                                                   
-      nchildren*: cint                                                                                                                                                                                               
-      children*: ptr ptr Arrowschema_1610612967                                                                                                                                                                      
-      dictionary*: ptr Arrowschema_1610612967                                                                                                                                                                        
-      release*: proc (a0: ptr Arrowschema_1610612967): void {.cdecl.}
-]#
 
 type
-  ArrowFlag* {.size: sizeof(cint).} = enum
+  ArrowType* {.size: sizeof(int32).} = enum
+    atInvalid = "invalid"
+    atNull = "null"
+    atBoolean = "boolean"
+    atInt8 = "int8"
+    atUInt8 = "uint8"
+    atInt16 = "int16"
+    atUInt16 = "uint16"
+    atInt32 = "int32"
+    atUInt32 = "uint32"
+    atInt64 = "int64"
+    atUInt64 = "uint64"
+    #atFloat16 = "float16"
+    atFloat32 = "float32"
+    atFloat64 = "float64"
+    atBinary = "binary"
+    atLargeBinary = "large binary"
+    atUTF8String = "utf8 string"
+    atLargeUtf8String = "large utf8 string"
+    #atDecimal128 = "decimal128"
+    #aFixedWidth = "fixed width"
+    #atTemporal = "temporal"
+
+  ArrowFlag* {.size: sizeof(int64).} = enum
     afDictionaryOrdered = 1
     afNullable
     afMapKeysSorted
+
+  ArrowMetadata* = object
+    nKeys: cint
+
   ArrowSchema* = object
     format: cstring
     name: cstring
     metadata: ptr UncheckedArray[char]
     flags: set[ArrowFlag]
-    nChildren: cint
+    nChildren: int64
     children: ptr UncheckedArray[ptr ArrowSchema]
     dictionary: ptr ArrowSchema
     release: proc(a: ptr ArrowSchema): void {.cdecl.}
     privateData: pointer
+
   ArrowArray* = object
-    length: cint
-    nullCount: cint
-    offset: cint
-    nBuffers: cint
-    nChildren: cint
+    length: int64
+    nullCount: int64
+    offset: int64
+    nBuffers: int64
+    nChildren: int64
     buffers: ptr UncheckedArray[pointer]
     children: ptr UncheckedArray[ptr ArrowArray]
     dictionary: ptr ArrowArray
     release: proc(a: ptr ArrowArray): void {.cdecl.}
     privateData: pointer
+
   ArrowBaseStructure = ArrowSchema | ArrowArray
 
 
+
+const 
+  formatTypeMap* = block:
+    var res: array[char, ArrowType]
+    res['n'] = atNull
+    res['b'] = atBoolean
+    res['c'] = atInt8
+    res['C'] = atUInt8
+    res['s'] = atInt16
+    res['S'] = atUInt16
+    res['i'] = atInt32
+    res['I'] = atUInt32
+    res['l'] = atInt64
+    res['L'] = atUInt64
+    res['e'] = atInvalid  # not supported https://github.com/nim-lang/Nim/issues/12769
+    res['f'] = atFloat32
+    res['g'] = atFloat64
+    res['z'] = atBinary
+    res['Z'] = atLargeBinary
+    res['u'] = atUTF8String
+    res['U'] = atLargeUtf8String
+    # TODO https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.format
+    res['d'] = atInvalid
+    res['w'] = atInvalid
+    res['t'] = atInvalid
+    res
+  formatChars* = block:
+    var res: set[char]
+    for key, val in formatTypeMap:
+      if val != atInvalid:
+        res.incl key
+    res
+
+
 # Getters
-proc release*[T: ArrowBaseStructure](s: T): void = 
-  s.release(s.unsafeAddr)
 
-proc getLength*(aarray: ArrowArray): int =
-  aarray.length
+func format*(sch: ArrowSchema): string =
+  $sch.format
 
-proc getNbuffers*(aarray: ArrowArray): int =
-  aarray.nBuffers
+func length*(arr: ArrowArray): int64 =
+  arr.length
 
-proc getFormat*(aschema: ArrowSchema): string =
-  $aschema.format
+func nullCount*(arr: ArrowArray): int64 =
+  arr.nullCount
 
-# test 
+func datatype*(sch: ArrowSchema): ArrowType =
+  let fchar = sch.format[0]
+  if fchar in formatChars:
+    formatTypeMap[fchar]
+  else:
+    atInvalid
+
+template children*(abs: ArrowBaseStructure): openArray[ptr ArrowBaseStructure] =
+  abs.children.toOpenArray(0, abs.nChildren.int-1)
+
+template buffers*(arr: ArrowArray): openArray[pointer] =
+  arr.buffers.toOpenArray(0, arr.nBuffers.int-1)
+
+func size*(at: ArrowType): int =
+  template err = raise newException(ValueError, &"Invalid type {$at}")
+  case at:
+  of atInvalid: err()
+  of atNull: void.sizeof
+  of atBoolean: bool.sizeof
+  of atInt8: int8.sizeof
+  of atUInt8: uint8.sizeof
+  of atInt16: int16.sizeof
+  of atUInt16: uint16.sizeof
+  of atInt32: int32.sizeof
+  of atUInt32: uint32.sizeof
+  of atInt64: int64.sizeof
+  of atUInt64: uint64.sizeof
+  of atFloat32: float32.sizeof
+  of atFloat64: float64.sizeof
+  # TODO
+  of atBinary: err()
+  of atLargeBinary: err()
+  of atUTF8String: err()
+  of atLargeUtf8String: err()
+
+
+# func values*(arr: ArrowArray, at: ArrowType): int =
+#   template err = raise newException(ValueError, &"Invalid type {$at}")
+#   case at:
+#   of atInvalid: err()
+#   of atNull: err()
+#   of atBoolean: err()
+#   of atInt8: err()
+#   of atUInt8: err()
+#   of atInt16: err()
+#   of atUInt16: err()
+#   of atInt32: err()
+#   of atUInt32: err()
+#   of atInt64: err()
+#   of atUInt64: err()
+#   of atFloat32: err()
+#   of atFloat64: err()
+#   # TODO
+#   of atBinary: err()
+#   of atLargeBinary: err()
+#   of atUTF8String: err()
+#   of atLargeUtf8String: err()
+
+#template values*(arr: ArrowArray): untyped =
+#  let 
+#    validityBitmap = arr.buffers[0]
+#    values = cast[UncheckedArray[]](arr.buffers[1])
+
+
+# Memory management
+
+proc release*(abs: ArrowBaseStructure) = 
+  abs.release(abs.unsafeAddr)
+
+
+
+# Pretty
+
+func `$`*(abs: ArrowBaseStructure): string =
+  result &= $abs.type & "\n"
+  
+  when abs is ArrowSchema:
+    result &= &"format: {abs.format} ({abs.datatype})\n"
+    result &= &"name: {abs.name}\n"
+    result &= &"metadata.isNil: {abs.metadata.isNil}\n"
+    result &= &"flags: {abs.flags}\n"
+  
+  when abs is ArrowArray:
+    result &= &"length: {abs.length}\n"
+    result &= &"nullCount: {abs.nullCount}\n"
+    result &= &"offset: {abs.offset}\n"
+    result &= &"nBuffers: {abs.nBuffers}\n"
+    for i, buffer in buffers(abs):
+      result &= &"buffer[{i}]: {repr buffer}\n"
+
+  result &= &"nChildren: {abs.nChildren}\n"
+  for i, child in children(abs):
+    if not child.isNil:
+      result &= &"child[{i}]: {child[]}\n"
+  result &= &"dictionary.isNil: {abs.dictionary.isNil}\n"
+  if not abs.dictionary.isNil:
+    result &= &"dictionary: {abs.dictionary[]}\n"
+  result &= &"release.isNil: {abs.release.isNil}\n"
+  result &= &"privateData.isNil: {abs.privateData.isNil}\n"
+
+
+
+# Producers TODO 
 proc releaseExported[T: ptr ArrowBaseStructure](bs: T) {.cdecl.} =
   when T is ArrowSchema:
     doAssert not bs.format.isNil
 
-  for i in 0..<bs.nchildren:
+  for i in 0..<bs.nChildren:
     let child: T = bs.children[i]
     if not child.isNil:
       child.release(child)

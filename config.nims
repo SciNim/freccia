@@ -1,0 +1,3 @@
+--gc:arc
+--lineDir:on
+--styleCheck:hint
