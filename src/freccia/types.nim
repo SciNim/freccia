@@ -4,29 +4,6 @@ import std/[strformat, strutils]
 
 
 type
-  ArrowType* {.size: sizeof(int32).} = enum
-    atInvalid = "invalid"
-    atNull = "null"
-    atBoolean = "bool"
-    atInt8 = "int8"
-    atUInt8 = "uint8"
-    atInt16 = "int16"
-    atUInt16 = "uint16"
-    atInt32 = "int32"
-    atUInt32 = "uint32"
-    atInt64 = "int64"
-    atUInt64 = "uint64"
-    #atFloat16 = "float16"
-    atFloat32 = "float32"
-    atFloat64 = "float64"
-    atBinary = "binary"
-    atLargeBinary = "large binary"
-    atUTF8String = "utf8 string"
-    atLargeUtf8String = "large utf8 string"
-    #atDecimal128 = "decimal128"
-    #aFixedWidth = "fixed width"
-    #atTemporal = "temporal"
-
   ArrowFlag* {.size: sizeof(int64).} = enum
     afDictionaryOrdered = 1
     afNullable
@@ -58,8 +35,60 @@ type
     release: proc(a: ptr ArrowArray): void {.cdecl.}
     privateData: pointer
 
-  ArrowBaseStructure = ArrowSchema | ArrowArray
+  ArrowBaseStructure* = ArrowSchema | ArrowArray
 
+  # https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings
+  ArrowType* = enum
+    atInvalid = "invalid"
+    atNull = "null"
+    atBoolean = "bool"
+    atInt8 = "int8"
+    atUInt8 = "uint8"
+    atInt16 = "int16"
+    atUInt16 = "uint16"
+    atInt32 = "int32"
+    atUInt32 = "uint32"
+    atInt64 = "int64"
+    atUInt64 = "uint64"
+    atFloat16 = "float16"
+    atFloat32 = "float32"
+    atFloat64 = "float64"
+    atBinary = "binary"
+    atLargeBinary = "large binary"
+    atUTF8String = "utf8 string"
+    atLargeUtf8String = "large utf8 string"
+    atDecimal128 = "decimal128"
+    atDecimal128Bitwidth = "decimal12 with bitwidth"
+    aFixedWidth = "fixed-width binary"
+    atDate32days = "date32 [days]"
+    atDate64millis = "date64 [milliseconds]"
+    atTime32seconds = "time32 [seconds]"
+    atTime32millis = "time32 [milliseconds]"
+    atTime64micros = "time64 [microseconds]"
+    atTime64nanos = "time64 [nanoseconds]"
+    atTimestampSeconds = "timestamp [seconds] with timezone"
+    atTimestampMillis = "timestamp [milliseconds] with timezone"
+    atTimestampMicros = "timestamp [microseconds] with timezone"
+    atTimestampNanos = "timestamp [nanoseconds] with timezone"
+    atDurationSeconds = "duration [seconds]"
+    atDurationMillis = "duration [milliseconds]"
+    atDurationMicros = "duration [microseconds]"
+    atDurationNanos = "duration [nanoseconds]"
+    atIntervalMonths = "interval [months]"
+    atIntervalDayTime = "interval [day, time]"
+    atIntervalMonthDayTime = "interval [month, day, time]"
+
+  # https://arrow.apache.org/docs/format/Columnar.html#id2
+  ArrowLayoutType* = enum
+    alPrimitive = "primitive (fixed-size)"
+    alVariableBinary = "variable-size binary"
+    alFixedList = "fixed-size list"
+    alVariableList = "variable-size list"
+    alStruct = "struct"
+    alUnionSparse = "sparse union"
+    alUnionDense = "dense union"
+    alNull = "null sequence"
+    alDictionary = "dictionary encoded"
 
 # Compile time goodies
 
@@ -83,10 +112,9 @@ const
     res['Z'] = atLargeBinary
     res['u'] = atUTF8String
     res['U'] = atLargeUtf8String
-    # TODO https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.format
-    res['d'] = atInvalid
-    res['w'] = atInvalid
-    res['t'] = atInvalid
+    res['d'] = atInvalid # TODO https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.format
+    res['w'] = atInvalid # TODO
+    res['t'] = atInvalid # TODO
     res
   formatTypeMapInv* = block:
     var res: array[ArrowType, char]
@@ -129,10 +157,15 @@ template buffers*(arr: ArrowArray): openArray[pointer] =
   arr.buffers.toOpenArray(0, arr.nBuffers.int-1)
 
 template values*[T](arr: ArrowArray): openArray[T] =
-  let 
-    validityBitmap = arr.buffers[0]
-    values = cast[ptr UncheckedArray[T]](arr.buffers[1])
+  let values = cast[ptr UncheckedArray[T]](arr.buffers[1])
   values.toOpenArray(0, arr.length.int-1)
+
+func isValid*(arr: ArrowArray, i: int): bool =
+  if arr.buffers[0].isNil: 
+    true
+  else: 
+    let bitmap = cast[ptr UncheckedArray[byte]](arr.buffers[0])
+    (bitmap[i div 8] and (1.byte shl (i mod 8))).bool
 
 
 # Getters
@@ -153,11 +186,9 @@ func parseType*(sch: ArrowSchema): ArrowType =
   else:
     atInvalid
 
-
 func size*(at: ArrowType): int =
   template err = raise newException(ValueError, &"Invalid type {$at}")
   case at:
-  of atInvalid: err()
   of atNull: atNull.dtype.sizeof
   of atBoolean: atBoolean.dtype.sizeof
   of atInt8: atInt8.dtype.sizeof
@@ -171,10 +202,7 @@ func size*(at: ArrowType): int =
   of atFloat32: atFloat32.dtype.sizeof
   of atFloat64: atFloat64.dtype.sizeof
   # TODO
-  of atBinary: err()
-  of atLargeBinary: err()
-  of atUTF8String: err()
-  of atLargeUtf8String: err()
+  else: err()
 
 
 # Memory management

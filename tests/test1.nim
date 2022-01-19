@@ -48,10 +48,10 @@ test "pyarrow to nim stack":
   discard pyears.append 1998
   discard pyears.append py.None
   discard pyears.append 2000
-  var years = pa.`array`(pyears, type=pa.callMethod("float64"))
+  var years = pa.`array`(pyears, type=pa.callMethod("uint32"))
   discard years.callMethod("_export_to_c", cast[int](arr.unsafeAddr), cast[int](sch.unsafeAddr))
 
-  const at = atFloat64
+  const at = atUInt32
   template dt = atType.dtype
   check sch.format[0] == formatTypeMapInv[at]
   check sch.parseType == at
@@ -64,8 +64,10 @@ test "pyarrow to nim stack":
   for i, v in arr.values[: at.dtype]:
     let pyObj = pyears[i]
     if pyObj == py.None:
-      check v == 0 # TODO
+      check v == 0 # not strictly required
+      check not arr.isValid(i)
     else:
+      check arr.isValid(i)
       check pyObj.to(at.dtype) == v
 
 
