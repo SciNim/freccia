@@ -3,16 +3,24 @@ Apache Arrow implementation in Nim
 
 *Early experiments*
 
-TODO:
-- [X] read basic Arrow Scheme
-- [X] read numerical data from ArrowArray as openArray
+#TODO
+
+### Basic:
+- [X] implement Arrow C data interface
+- [X] read Arrow Scheme from C interface
+- [X] read numerical data from C interface
+- [X] zero-copy view as openArray
 - [X] handle null bitmask
 - [X] implement Flatbuffer scheme for metadata
-- [X] parse format string into Type + metadata
-- [ ] handle binary / large binary types
-- [ ] handle UTF8 string / large UTF8 string types
-- [ ] handle decimal128 + bitwidth types
-- [ ] handle fixed-width binary
-- [ ] handle temporal data
-- [ ] handle dictionary encoded types
-- [ ] handle nested types
+- [X] parse format string into metadata Type
+
+### Layouts:
+- [X] handle fixed-size primitive layout
+- [ ] handle variable-size binary Layout
+- [ ] handle variable-size List layout
+- [ ] handle fixed-Size list layout
+- [ ] handle struct layout
+- [ ] handle dense union layout
+- [ ] handle sparse union layout
+- [ ] handle null layout
+- [ ] handle dictionary-encoded layout
