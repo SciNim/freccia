@@ -1,40 +1,8 @@
 import std/[strformat, strutils]
-
-# From https://arrow.apache.org/docs/format/CDataInterface.html
-
+import cinterface
+import schema
 
 type
-  ArrowFlag* {.size: sizeof(int64).} = enum
-    afDictionaryOrdered = 1
-    afNullable
-    afMapKeysSorted
-
-  ArrowMetadata* = object
-    nKeys: cint
-
-  ArrowSchema* = object
-    format: cstring
-    name: cstring
-    metadata: ptr UncheckedArray[char]
-    flags: set[ArrowFlag]
-    nChildren: int64
-    children: ptr UncheckedArray[ptr ArrowSchema]
-    dictionary: ptr ArrowSchema
-    release: proc(a: ptr ArrowSchema): void {.cdecl.}
-    privateData: pointer
-
-  ArrowArray* = object
-    length: int64
-    nullCount: int64
-    offset: int64
-    nBuffers: int64
-    nChildren: int64
-    buffers: ptr UncheckedArray[pointer]
-    children: ptr UncheckedArray[ptr ArrowArray]
-    dictionary: ptr ArrowArray
-    release: proc(a: ptr ArrowArray): void {.cdecl.}
-    privateData: pointer
-
   ArrowBaseStructure* = ArrowSchema | ArrowArray
 
   # https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings
@@ -89,6 +57,7 @@ type
     alUnionDense = "dense union"
     alNull = "null sequence"
     alDictionary = "dictionary encoded"
+
 
 # Compile time goodies
 
@@ -150,10 +119,10 @@ template dtype*(at: ArrowType): typedesc =
   elif at == atLargeUtf8String: {.error.}
   else: {.error.}
 
-template children*(abs: ArrowBaseStructure): openArray[ptr ArrowBaseStructure] =
+template childrenList*(abs: ArrowBaseStructure): openArray[ptr ArrowBaseStructure] =
   abs.children.toOpenArray(0, abs.nChildren.int-1)
 
-template buffers*(arr: ArrowArray): openArray[pointer] =
+template bufferList*(arr: ArrowArray): openArray[pointer] =
   arr.buffers.toOpenArray(0, arr.nBuffers.int-1)
 
 template values*[T](arr: ArrowArray): openArray[T] =
@@ -207,7 +176,7 @@ func size*(at: ArrowType): int =
 
 # Memory management
 
-proc release*(abs: ArrowBaseStructure) = 
+proc rootRelease*(abs: ArrowBaseStructure) = 
   abs.release(abs.unsafeAddr)
 
 
@@ -228,11 +197,11 @@ func `$`*(abs: ArrowBaseStructure): string =
     result &= &"nullCount: {abs.nullCount}\n"
     result &= &"offset: {abs.offset}\n"
     result &= &"nBuffers: {abs.nBuffers}\n"
-    for i, buffer in buffers(abs):
+    for i, buffer in abs.bufferList:
       result &= &"buffer[{i}]: {repr buffer}\n"
 
   result &= &"nChildren: {abs.nChildren}\n"
-  for i, child in children(abs):
+  for i, child in abs.childrenList:
     if not child.isNil:
       result &= &"child[{i}]: {child[]}\n"
   result &= &"dictionary.isNil: {abs.dictionary.isNil}\n"
@@ -240,33 +209,3 @@ func `$`*(abs: ArrowBaseStructure): string =
     result &= &"dictionary: {abs.dictionary[]}\n"
   result &= &"release.isNil: {abs.release.isNil}\n"
   result &= &"privateData.isNil: {abs.privateData.isNil}\n"
-
-
-
-# Producers TODO 
-proc releaseExported[T: ptr ArrowBaseStructure](bs: T) {.cdecl.} =
-  when T is ArrowSchema:
-    doAssert not bs.format.isNil
-
-  for i in 0..<bs.nChildren:
-    let child: T = bs.children[i]
-    if not child.isNil:
-      child.release(child)
-      doAssert child.release.isNil
-
-  let dict: T = bs.dictionary
-  if not dict.isNil and not dict.release.isNil:
-    dict.release(dict)
-    doAssert dict.release.isNil
-
-  bs.release = nil
-
-proc exportInt32Type*(s: ptr ArrowSchema) =
-  s.format = "i".cstring
-  s.name = ""
-  s.metadata = nil
-  s.flags = {}
-  s.nChildren = 0
-  s.children = nil
-  s.dictionary = nil
-  s.release = releaseExported

@@ -5,6 +5,26 @@ import freccia
 
 
 
+
+test "parser":
+  template checkstr(a: untyped, b: untyped) = check $a == $b
+  # https://forum.nim-lang.org/t/6781
+  checkstr parseFormat("d:12,20"), Type(kind: tkDecimal, decimalMeta: Decimal(precision: 12, scale: 20, bitWidth: 128))
+  checkstr parseFormat("d:19,10,256"), Type(kind: tkDecimal, decimalMeta: Decimal(precision: 19, scale: 10, bitWidth: 256))
+  checkstr parseFormat("w:42"), Type(kind: tkFixedSizeBinary, fixedSizeBinaryMeta: FixedSizeBinary(byteWidth: 42))
+  checkstr parseFormat("tdD"), Type(kind: tkDate, dateMeta: Date(unit: duDay))
+  checkstr parseFormat("ttn"), Type(kind: tkTime, timeMeta: Time(unit: tuNanosecond, bitWidth: 64))
+  checkstr parseFormat("tsu:Europe/Rome"), Type(kind: tkTimestamp, timestampMeta: Timestamp(unit: tuMicrosecond, zone: "Europe/Rome"))
+  checkstr parseFormat("tsu:"), Type(kind: tkTimestamp, timestampMeta: Timestamp(unit: tuMicrosecond, zone: ""))
+  checkstr parseFormat("tDs"), Type(kind: tkDuration, durationMeta: Duration(unit: tuSecond))
+  checkstr parseFormat("tiD"), Type(kind: tkInterval, intervalMeta: Interval(unit: iuDayTime))
+  checkstr parseFormat("+l"), Type(kind: tkList, listMeta: List())
+  checkstr parseFormat("+L"), Type(kind: tkLargeList, largeListMeta: LargeList())
+  checkstr parseFormat("+w:418"), Type(kind: tkFixedSizeList, fixedSizeListMeta: FixedSizeList(listSize: 418))
+  checkstr parseFormat("+ud:123,2,31,4000,5123"), Type(kind: tkUnion, unionMeta: Union(mode: umDense, typeIds: @[123.int32, 2, 31, 4000, 5123]))
+
+
+
 test "format":
   block:
     let fmtType = formatTypeMap['I']
@@ -31,6 +51,8 @@ test "format":
     check not compiles(atUTF8String.dtype)
     check not compiles(atLargeUtf8String.dtype)
 
+
+
 # https://github.com/apache/arrow/blob/97879eb970bac52d93d2247200b9ca7acf6f3f93/python/pyarrow/tests/test_cffi.py#L109
 # https://github.com/apache/arrow/blob/488f084280fa5e2acea76dcb02dd0c3ee655f55b/python/pyarrow/array.pxi#L1312
 test "pyarrow to nim stack":
@@ -49,7 +71,7 @@ test "pyarrow to nim stack":
   discard pyears.append py.None
   discard pyears.append 2000
   var years = pa.`array`(pyears, type=pa.callMethod("uint32"))
-  discard years.callMethod("_export_to_c", cast[int](arr.unsafeAddr), cast[int](sch.unsafeAddr))
+  discard years.callMethod("_export_to_c", cast[int](arr.addr), cast[int](sch.addr))
 
   const at = atUInt32
   template dt = atType.dtype
@@ -57,8 +79,8 @@ test "pyarrow to nim stack":
   check sch.parseType == at
   check arr.length == 7
   check arr.nullCount == 2
-  check arr.buffers.len == 2
-  check arr.children.len == 0
+  check arr.bufferList.len == 2
+  check arr.childrenList.len == 0
   #echo $sch
   #echo $arr
   for i, v in arr.values[: at.dtype]:
@@ -71,14 +93,17 @@ test "pyarrow to nim stack":
       check pyObj.to(at.dtype) == v
 
 
+
 # producers
 test "do the stack":
   var s = ArrowSchema()
-  exportInt32Type(s.unsafeAddr)
-  s.release
+  exportInt32Type(s.addr)
+  s.rootRelease()
+
+
 
 test "do the heap":
   var s: ptr ArrowSchema = cast[ptr ArrowSchema](alloc(ArrowSchema.sizeof))
   exportInt32Type(s)
-  s[].release
+  s[].rootRelease()
   dealloc(s)

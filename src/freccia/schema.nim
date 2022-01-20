@@ -7,14 +7,14 @@ type
   # 16 bit: short (int16), ushort (uint16)
   # 32 bit: int (int32), uint (uint32), float (float32)
   # 64 bit: long (int64), ulong (uint64), double (float64)
-  MetadataVersion* {.size: sizeof(cshort).} = enum
+  MetadataVersion* {.size: sizeof(int16).} = enum
     mvV1
     mvV2
     mvV3
     mvV4
     mvV5
 
-  Feature* {.size: sizeof(clong).} = enum
+  Feature* {.size: sizeof(int64).} = enum
     fUnused = 0,
     fDictionaryReplacement,
     fCompressedBody
@@ -28,30 +28,30 @@ type
   LargeList* = object
 
   FixedSizeList* = object
-    listSize: cint
+    listSize*: int32
 
   Map* = object
-    keySorted: bool
+    keySorted*: bool
 
-  UnionMode* {.size: sizeof(cshort).} = enum
+  UnionMode* {.size: sizeof(int16).} = enum
     umSparse
     umDense
   
   Union* = object
-    mode: UnionMode
-    typeIds: seq[cint]
+    mode*: UnionMode
+    typeIds*: seq[int32]
 
   Int* = object
-    bitWidth: cint
-    isSigned: bool
+    bitWidth*: int32
+    isSigned*: bool
 
-  Precision* {.size: sizeof(cshort).} = enum
+  Precision* {.size: sizeof(int16).} = enum
     pHalf
     pSingle
     pDouble
 
   FloatingPoint* = object
-    precision: Precision
+    precision*: Precision
 
   Utf8* = object
 
@@ -62,47 +62,48 @@ type
   LargeBinary* = object
 
   FixedSizeBinary* = object
-    byteWidth: cint
+    byteWidth*: int32
 
   Bool* = object
 
   Decimal* = object
-    precision: cint
-    scale: cint
-    bitWidth: int # default 128
+    precision*: int32
+    scale*: int32
+    bitWidth*: int32 # default 128
 
-  DateUnit* {.size: sizeof(cshort).} = enum
+  DateUnit* {.size: sizeof(int16).} = enum
     duDay
     duMillisecond
 
   Date* = object
-    unit: DateUnit # default duMillisecond
+    unit*: DateUnit # default duMillisecond
 
-  TimeUnit* {.size: sizeof(cshort).} = enum
+  TimeUnit* {.size: sizeof(int16).} = enum
     tuSecond
     tuMillisecond
     tuMicrosecond
     tuNanosecond
 
   Time* = object
-    unit: TimeUnit # default tuMillisecond
-    bitWidth: cint # default 32
+    unit*: TimeUnit # default tuMillisecond
+    bitWidth*: int32 # default 32
 
   Timestamp* = object
-    unit: TimeUnit
+    unit*: TimeUnit
+    zone*: string
 
-  IntervalUnit* {.size: sizeof(cshort).} = enum
+  IntervalUnit* {.size: sizeof(int16).} = enum
     iuYearMonth
     iuDayTime
     iuMonthDayNano
 
   Interval* = object
-    unit: IntervalUnit
+    unit*: IntervalUnit
 
   Duration* = object
-    unit: TimeUnit # default tuMillisecond
+    unit*: TimeUnit # default tuMillisecond
 
-  TypeKind* {.size: sizeof(cshort).} = enum
+  TypeKind* {.size: sizeof(int16).} = enum
     tkNull
     tkInt
     tkFloatingPoint
@@ -126,62 +127,62 @@ type
     tkLargeList
 
   Type* = object
-    case kind: TypeKind
-    of tkNull: nullMeta: Null
-    of tkInt: intMeta: Int
-    of tkFloatingPoint: floatingPointMeta: FloatingPoint
-    of tkBinary: binaryMeta: Binary
-    of tkUtf8: utf8Meta: Utf8
-    of tkBool: boolMeta: Bool
-    of tkDecimal: decimalMeta: Decimal
-    of tkDate: dateMeta: Date
-    of tkTime: timeMeta: Time
-    of tkTimestamp: timestampMeta: Timestamp
-    of tkInterval: intervalMeta: Interval
-    of tkList: listMeta: List
-    of tkStruct: structMeta: Struct
-    of tkUnion: unionMeta: Union
-    of tkFixedSizeBinary: fixedSizeBinaryMeta: FixedSizeBinary
-    of tkFixedSizeList: fixedSizeListMeta: FixedSizeList
-    of tkMap: mapMeta: Map
-    of tkDuration: durationMeta: Duration
-    of tkLargeBinary: largeBinaryMeta: LargeBinary
-    of tkLargeUtf8: largeUtf8Meta: LargeUtf8
-    of tkLargeList: largeListMeta: LargeList
+    case kind*: TypeKind
+    of tkNull: nullMeta*: Null
+    of tkInt: intMeta*: Int
+    of tkFloatingPoint: floatingPointMeta*: FloatingPoint
+    of tkBinary: binaryMeta*: Binary
+    of tkUtf8: utf8Meta*: Utf8
+    of tkBool: boolMeta*: Bool
+    of tkDecimal: decimalMeta*: Decimal
+    of tkDate: dateMeta*: Date
+    of tkTime: timeMeta*: Time
+    of tkTimestamp: timestampMeta*: Timestamp
+    of tkInterval: intervalMeta*: Interval
+    of tkList: listMeta*: List
+    of tkStruct: structMeta*: Struct
+    of tkUnion: unionMeta*: Union
+    of tkFixedSizeBinary: fixedSizeBinaryMeta*: FixedSizeBinary
+    of tkFixedSizeList: fixedSizeListMeta*: FixedSizeList
+    of tkMap: mapMeta*: Map
+    of tkDuration: durationMeta*: Duration
+    of tkLargeBinary: largeBinaryMeta*: LargeBinary
+    of tkLargeUtf8: largeUtf8Meta*: LargeUtf8
+    of tkLargeList: largeListMeta*: LargeList
 
   KeyValue* = object
-    key: cstring
-    value: cstring
+    key*: string
+    value*: string
 
-  DictionaryKind* {.size: sizeof(cshort).} = enum
+  DictionaryKind* {.size: sizeof(int16).} = enum
     dkDenseArray
 
   DictionaryEncoding* = object
-    id: clong
-    indexType: Int
-    isOrdered: bool
-    dictionaryKind: DictionaryKind
+    id*: int64
+    indexType*: Int
+    isOrdered*: bool
+    dictionaryKind*: DictionaryKind
 
   Field* = object
-    name: cstring
-    nullable: bool
-    `type`: Type
-    dictionary: DictionaryEncoding
-    children: seq[Field]
-    customMetadata: seq[KeyValue]
+    name*: string
+    nullable*: bool
+    `type`*: Type
+    dictionary*: DictionaryEncoding
+    children*: seq[Field]
+    customMetadata*: seq[KeyValue]
 
-  Endianess* {.size: sizeof(cshort).} = enum
+  Endianess* {.size: sizeof(int16).} = enum
     eLittle
     eBig
 
   Buffer* = object
-    offset: clong
-    length: clong
+    offset*: int64
+    length*: int64
 
   Schema* = object
-    endianess: Endianess # default eLittle
-    fields: seq[Field]
-    customMetadata: seq[KeyValue]
-    features: seq[Feature]
+    endianess*: Endianess # default eLittle
+    fields*: seq[Field]
+    customMetadata*: seq[KeyValue]
+    features*: seq[Feature]
 
   RootType* = Schema
