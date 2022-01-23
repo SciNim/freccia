@@ -1,211 +1,176 @@
-import std/[strformat, strutils]
+import std/[sugar]
 import cinterface
 import schema
+import parser
+
 
 type
-  ArrowBaseStructure* = ArrowSchema | ArrowArray
-
-  # https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings
-  ArrowType* = enum
-    atInvalid = "invalid"
-    atNull = "null"
-    atBoolean = "bool"
-    atInt8 = "int8"
-    atUInt8 = "uint8"
-    atInt16 = "int16"
-    atUInt16 = "uint16"
-    atInt32 = "int32"
-    atUInt32 = "uint32"
-    atInt64 = "int64"
-    atUInt64 = "uint64"
-    atFloat16 = "float16"
-    atFloat32 = "float32"
-    atFloat64 = "float64"
-    atBinary = "binary"
-    atLargeBinary = "large binary"
-    atUTF8String = "utf8 string"
-    atLargeUtf8String = "large utf8 string"
-    atDecimal128 = "decimal128"
-    atDecimal128Bitwidth = "decimal12 with bitwidth"
-    aFixedWidth = "fixed-width binary"
-    atDate32days = "date32 [days]"
-    atDate64millis = "date64 [milliseconds]"
-    atTime32seconds = "time32 [seconds]"
-    atTime32millis = "time32 [milliseconds]"
-    atTime64micros = "time64 [microseconds]"
-    atTime64nanos = "time64 [nanoseconds]"
-    atTimestampSeconds = "timestamp [seconds] with timezone"
-    atTimestampMillis = "timestamp [milliseconds] with timezone"
-    atTimestampMicros = "timestamp [microseconds] with timezone"
-    atTimestampNanos = "timestamp [nanoseconds] with timezone"
-    atDurationSeconds = "duration [seconds]"
-    atDurationMillis = "duration [milliseconds]"
-    atDurationMicros = "duration [microseconds]"
-    atDurationNanos = "duration [nanoseconds]"
-    atIntervalMonths = "interval [months]"
-    atIntervalDayTime = "interval [day, time]"
-    atIntervalMonthDayTime = "interval [month, day, time]"
-
   # https://arrow.apache.org/docs/format/Columnar.html#id2
-  ArrowLayoutType* = enum
+  # Offset = int32 | int64
+  # Buffer[T] = ptr UncheckedArray[T]
+  # ValidityBuffer = Buffer[byte]
+  # OffsetBuffer[T: Offset] = Buffer[T]
+  # TypeIdBuffer = Buffer[int8]
+  # PrimitiveLayout[T] = object
+  #   validity: ValidityBuffer
+  #   data: Buffer[T]
+  # VariableBinaryLayout[B: Offset] = object
+  #   validity: ValidityBuffer
+  #   offsets: OffsetBuffer[B]
+  #   data: Buffer[byte]
+  # VariableListLayout[B: Offset] = object
+  #   validity: ValidityBuffer
+  #   offsets: OffsetBuffer[B]
+  # FixedSizeListLayout[T, size: static[int32]] = object
+  #   validity: ValidityBuffer
+  # StructLayout[T: tuple] = object
+  #   validity: ValidityBuffer
+  # UnionSparseLayout[T: tuple] = object
+  #   typeIds: TypeIdBuffer
+  # UnionDenseLayout[T: tuple] = object
+  #   typeIds: TypeIdBuffer
+  #   offsets: OffsetBuffer[int32]
+  # NullLayout = object
+  # DictionaryLayout[T: SomeSignedInt] = object
+  #   validity: ValidityBuffer
+  #   indices: Buffer[T]
+  # Layout = PrimitiveLayout | VariableBinaryLayout | VariableListLayout | FixedSizeListLayout |
+  #   StructLayout | UnionSparseLayout | UnionDenseLayout | NullLayout | DictionaryLayout
+  # AbstractType = Null | Int | FloatingPoint | Binary | Utf8 | Bool | Decimal | Date | Time | Timestamp | Interval |
+  #   List | Struct | Union | FixedSizeBinary | FixedSizeList | Map | Duration | LargeBinary | LargeUtf8 | LargeList
+  # ConcreteType = Null | int16 | int32 | int64 | uint16 | uint32 | uint64 | float32 | float64 | bool
+  LayoutKind* = enum
     alPrimitive = "primitive (fixed-size)"
     alVariableBinary = "variable-size binary"
-    alFixedList = "fixed-size list"
     alVariableList = "variable-size list"
+    alFixedList = "fixed-size list"
     alStruct = "struct"
     alUnionSparse = "sparse union"
     alUnionDense = "dense union"
     alNull = "null sequence"
     alDictionary = "dictionary encoded"
+  ArrowArray* = object
+    cschema*: CSchema
+    carray*: CArray
+    typeinfo*: Type
 
-
-# Compile time goodies
 
 const 
-  formatTypeMap* = block:
-    var res: array[char, ArrowType]
-    res['n'] = atNull
-    res['b'] = atBoolean
-    res['c'] = atInt8
-    res['C'] = atUInt8
-    res['s'] = atInt16
-    res['S'] = atUInt16
-    res['i'] = atInt32
-    res['I'] = atUInt32
-    res['l'] = atInt64
-    res['L'] = atUInt64
-    res['e'] = atInvalid  # not supported https://github.com/nim-lang/Nim/issues/12769
-    res['f'] = atFloat32
-    res['g'] = atFloat64
-    res['z'] = atBinary
-    res['Z'] = atLargeBinary
-    res['u'] = atUTF8String
-    res['U'] = atLargeUtf8String
-    res['d'] = atInvalid # TODO https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema.format
-    res['w'] = atInvalid # TODO
-    res['t'] = atInvalid # TODO
-    res
-  formatTypeMapInv* = block:
-    var res: array[ArrowType, char]
-    for key, val in formatTypeMap:
-      if val != atInvalid:
-        res[val] = key
-    res
-  formatChars* = block:
-    var res: set[char]
-    for key, val in formatTypeMap:
-      if val != atInvalid:
-        res.incl key
-    res
+  fixedSizeTypes = {tkInt, tkFloatingPoint, tkBool, tkDecimal, tkFixedSizeBinary, tkDate, tkTime, tkTimestamp, tkInterval, tkDuration}
+  variableSizeTypes = {tkBinary, tkLargeBinary, tkUtf8, tkLargeUtf8}
+  listTypes = {tkList, tkLargeList}
+  validableLayouts = {alPrimitive, alVariableBinary, alVariableList, alFixedList, alStruct, alDictionary}
+  offsettableLayouts = {alVariableBinary, alVariableList, alUnionDense}
+  
 
-template dtype*(at: ArrowType): typedesc =
-  when at == atInvalid: {.error.}
-  elif at == atNull: void
-  elif at == atBoolean: bool
-  elif at == atInt8: int8
-  elif at == atUInt8: uint8
-  elif at == atInt16: int16
-  elif at == atUInt16: uint16
-  elif at == atInt32: int32
-  elif at == atUInt32: uint32
-  elif at == atInt64: int64
-  elif at == atUInt64: uint64
-  elif at == atFloat32: float32
-  elif at == atFloat64: float64
-  # TODO
-  elif at == atBinary: {.error.}
-  elif at == atLargeBinary: {.error.}
-  elif at == atUTF8String: {.error.}
-  elif at == atLargeUtf8String: {.error.}
-  else: {.error.}
+# --------------------------------------------------------------
 
-template childrenList*(abs: ArrowBaseStructure): openArray[ptr ArrowBaseStructure] =
-  abs.children.toOpenArray(0, abs.nChildren.int-1)
 
-template bufferList*(arr: ArrowArray): openArray[pointer] =
-  arr.buffers.toOpenArray(0, arr.nBuffers.int-1)
+func `==`*(a: Type, b: Type): bool =
+  a.kind == b.kind and (case a.kind:
+    of tkNull: a.nullMeta == b.nullMeta
+    of tkInt: a.intMeta == b.intMeta
+    of tkFloatingPoint: a.floatingPointMeta == b.floatingPointMeta
+    of tkBinary: a.binaryMeta == b.binaryMeta
+    of tkUtf8: a.utf8Meta == b.utf8Meta
+    of tkBool: a.boolMeta == b.boolMeta
+    of tkDecimal: a.decimalMeta == b.decimalMeta
+    of tkDate: a.dateMeta == b.dateMeta
+    of tkTime: a.timeMeta == b.timeMeta
+    of tkTimestamp: a.timestampMeta == b.timestampMeta
+    of tkInterval: a.intervalMeta == b.intervalMeta
+    of tkList: a.listMeta == b.listMeta
+    of tkStruct: a.structMeta == b.structMeta
+    of tkUnion: a.unionMeta == b.unionMeta
+    of tkFixedSizeBinary: a.fixedSizeBinaryMeta == b.fixedSizeBinaryMeta
+    of tkFixedSizeList: a.fixedSizeListMeta == b.fixedSizeListMeta
+    of tkMap: a.mapMeta == b.mapMeta
+    of tkDuration: a.durationMeta == b.durationMeta
+    of tkLargeBinary: a.largeBinaryMeta == b.largeBinaryMeta
+    of tkLargeUtf8: a.largeUtf8Meta == b.largeUtf8Meta
+    of tkLargeList: a.largeListMeta == b.largeListMeta
+  )
 
-template values*[T](arr: ArrowArray): openArray[T] =
-  let values = cast[ptr UncheckedArray[T]](arr.buffers[1])
-  values.toOpenArray(0, arr.length.int-1)
+
+func layout*(t: Type): LayoutKind =
+  case t.kind:
+  of fixedSizeTypes: alPrimitive
+  of variableSizeTypes: alVariableBinary
+  of listTypes: alVariableList
+  of tkFixedSizeList: alFixedList
+  of tkStruct: alStruct
+  of tkUnion: 
+    case t.unionMeta.mode:
+      of umSparse: alUnionSparse
+      of umDense: alUnionDense
+  of tkNull: alNull
+  of tkMap: alDictionary
+
+
+func layout*(arr: ArrowArray): LayoutKind =
+  arr.typeinfo.layout
+
+
+func validityBuffer(arr: ArrowArray): openArray[byte] =
+  template view(i: int): untyped = 
+    cast[ptr UncheckedArray[byte]](arr.carray.bufferList[i]).toOpenArray(0, arr.carray.length.int-1)
+  case arr.layout:
+  of validableLayouts: result = view 0
+  else: raise newException(ValueError, "Layout has no validity buffer")
+
+
+func dataBuffer[T](arr: ArrowArray): openArray[T] =
+  template view(i: int): untyped = 
+    cast[ptr UncheckedArray[T]](arr.carray.bufferList[i]).toOpenArray(0, arr.carray.length.int-1)
+  case arr.layout:
+  of alPrimitive: result = view 1
+  of alVariableBinary: result = view 2
+  else: raise newException(ValueError, "Layout has no data buffer")
+
+
+func offsetsBuffer[T: int32 | int64](arr: ArrowArray): openArray[T] =
+  template view(i: int): untyped = 
+    # The offsets buffer contains length + 1 signed integers
+    cast[ptr UncheckedArray[T]](arr.carray.bufferList[i]).toOpenArray(0, arr.carray.length.int)
+  case arr.layout:
+  of offsettableLayouts: result = view 1
+  else: raise newException(ValueError, "Layout has no offsets buffer")
+
+
+func item*[T](arr: ArrowArray, i: int): T =
+  case arr.layout
+  of alPrimitive: arr.dataBuffer[: T][i]
+  else: raise newException(ValueError, "Unable to get item")
+
+
+func item*[T](arr: ArrowArray, i: int, typ: typedesc[T]): T =
+  arr.item[: T](i)
+
+
+func items*[T](arr: ArrowArray): openArray[T] =
+  arr.dataBuffer[:T]
+
+
+func itemBlob*(arr: ArrowArray, i: int): openArray[byte] =
+  template view[T](offsetType: typedesc[T]): untyped =
+    let
+      offsets = arr.offsetsBuffer[: offsetType]
+      slotPosition = offsets[i]
+      slotLength = offsets[i+1] - slotPosition
+    result = arr.dataBuffer[: byte].toOpenArray(slotPosition.int, slotLength.int-1)
+  case arr.typeinfo.kind
+  of tkBinary, tkUtf8: view(int32)
+  of tkLargeBinary, tkLargeUtf8: view(int64)
+  else: raise newException(ValueError, "Unable to get item")
+
 
 func isValid*(arr: ArrowArray, i: int): bool =
-  if arr.buffers[0].isNil: 
-    true
-  else: 
-    let bitmap = cast[ptr UncheckedArray[byte]](arr.buffers[0])
-    (bitmap[i div 8] and (1.byte shl (i mod 8))).bool
+  (arr.validityBuffer[i div 8] and (1.byte shl (i mod 8))).bool
 
 
-# Getters
-
-func format*(sch: ArrowSchema): string =
-  $sch.format
-
-func length*(arr: ArrowArray): int64 =
-  arr.length
-
-func nullCount*(arr: ArrowArray): int64 =
-  arr.nullCount
-
-func parseType*(sch: ArrowSchema): ArrowType =
-  let fchar = sch.format[0]
-  if fchar in formatChars:
-    formatTypeMap[fchar]
-  else:
-    atInvalid
-
-func size*(at: ArrowType): int =
-  template err = raise newException(ValueError, &"Invalid type {$at}")
-  case at:
-  of atNull: atNull.dtype.sizeof
-  of atBoolean: atBoolean.dtype.sizeof
-  of atInt8: atInt8.dtype.sizeof
-  of atUInt8: atUInt8.dtype.sizeof
-  of atInt16: atInt16.dtype.sizeof
-  of atUInt16: atUInt16.dtype.sizeof
-  of atInt32: atInt32.dtype.sizeof
-  of atUInt32: atUInt32.dtype.sizeof
-  of atInt64: atInt64.dtype.sizeof
-  of atUInt64: atUInt64.dtype.sizeof
-  of atFloat32: atFloat32.dtype.sizeof
-  of atFloat64: atFloat64.dtype.sizeof
-  # TODO
-  else: err()
+# --------------------------------------------------------------
 
 
-# Memory management
-
-proc rootRelease*(abs: ArrowBaseStructure) = 
-  abs.release(abs.unsafeAddr)
-
-
-
-# Pretty
-
-func `$`*(abs: ArrowBaseStructure): string =
-  result &= $abs.type & "\n"
-  
-  when abs is ArrowSchema:
-    result &= &"format: {abs.format} ({abs.parseType})\n"
-    result &= &"name: {abs.name}\n"
-    result &= &"metadata.isNil: {abs.metadata.isNil}\n"
-    result &= &"flags: {abs.flags}\n"
-  
-  when abs is ArrowArray:
-    result &= &"length: {abs.length}\n"
-    result &= &"nullCount: {abs.nullCount}\n"
-    result &= &"offset: {abs.offset}\n"
-    result &= &"nBuffers: {abs.nBuffers}\n"
-    for i, buffer in abs.bufferList:
-      result &= &"buffer[{i}]: {repr buffer}\n"
-
-  result &= &"nChildren: {abs.nChildren}\n"
-  for i, child in abs.childrenList:
-    if not child.isNil:
-      result &= &"child[{i}]: {child[]}\n"
-  result &= &"dictionary.isNil: {abs.dictionary.isNil}\n"
-  if not abs.dictionary.isNil:
-    result &= &"dictionary: {abs.dictionary[]}\n"
-  result &= &"release.isNil: {abs.release.isNil}\n"
-  result &= &"privateData.isNil: {abs.privateData.isNil}\n"
+proc initArrowArray*(cschema: CSchema, carray: CArray): ArrowArray =
+  let typeinfo = ($cschema.format).parseType 
+  ArrowArray(cschema: cschema, carray: carray, typeinfo: typeinfo)

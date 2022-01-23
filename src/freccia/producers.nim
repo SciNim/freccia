@@ -1,10 +1,9 @@
 import cinterface
-import binding
 
 
 # Producers TODO 
-proc releaseExported[T: ptr ArrowBaseStructure](bs: T) {.cdecl.} =
-  when T is ArrowSchema:
+proc releaseExported[T: ptr CBaseStructure](bs: T) {.cdecl.} =
+  when T is CSchema:
     doAssert not bs.format.isNil
 
   for i in 0..<bs.nChildren:
@@ -20,7 +19,7 @@ proc releaseExported[T: ptr ArrowBaseStructure](bs: T) {.cdecl.} =
 
   bs.release = nil
 
-proc exportInt32Type*(s: ptr ArrowSchema) =
+proc exportInt32Type*(s: ptr CSchema) =
   s.format = "i".cstring
   s.name = ""
   s.metadata = nil

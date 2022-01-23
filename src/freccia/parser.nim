@@ -1,6 +1,8 @@
 import std/[sugar]
 import schema
 
+
+
 # copying from parseutils to handle SomeSignedInt
 proc parseInt[T:SomeSignedInt](s: string, b: var T, start = 0): int =
   template err = raise newException(ValueError, "Parsed integer outside of valid range")
@@ -28,7 +30,8 @@ proc parseInt[T:SomeSignedInt](s: string, b: var T, start = 0): int =
       b = b * sign
       result = i - start
 
-func parseFormat*(format: string): Type =
+
+func parseType*(format: string): Type =
   template err = raise newException(ValueError, "invalid format")
   case format[0]:
   of 'n': result = Type(kind: tkNull)

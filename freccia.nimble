@@ -9,5 +9,5 @@ srcDir        = "src"
 
 # Dependencies
 
-requires "nim >= 1.4.2"
+requires "nim >= 1.4.8" # https://github.com/nim-lang/Nim/issues/19426
 requires "nimpy"
