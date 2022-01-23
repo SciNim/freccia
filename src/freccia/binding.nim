@@ -66,6 +66,19 @@ const
 # --------------------------------------------------------------
 
 
+template toType*[T](_: typedesc[T]): Type =
+  when T is int16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: true))
+  elif T is int32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: true))
+  elif T is int64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: true))
+  elif T is uint16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: false))
+  elif T is uint32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: false))
+  elif T is uint64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: false))
+  elif T is float32: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pSingle))
+  elif T is float64: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pDouble))
+  elif T is string: Type(kind: tkUtf8, utf8Meta: Utf8())
+  else: {.error.}
+
+
 func `==`*(a: Type, b: Type): bool =
   a.kind == b.kind and (case a.kind:
     of tkNull: a.nullMeta == b.nullMeta
@@ -111,7 +124,7 @@ func layout*(arr: ArrowArray): LayoutKind =
   arr.typeinfo.layout
 
 
-func validityBuffer(arr: ArrowArray): openArray[byte] =
+func validityBuffer*(arr: ArrowArray): openArray[byte] =
   template view(i: int): untyped = 
     cast[ptr UncheckedArray[byte]](arr.carray.bufferList[i]).toOpenArray(0, arr.carray.length.int-1)
   case arr.layout:
@@ -119,22 +132,27 @@ func validityBuffer(arr: ArrowArray): openArray[byte] =
   else: raise newException(ValueError, "Layout has no validity buffer")
 
 
-func dataBuffer[T](arr: ArrowArray): openArray[T] =
-  template view(i: int): untyped = 
-    cast[ptr UncheckedArray[T]](arr.carray.bufferList[i]).toOpenArray(0, arr.carray.length.int-1)
-  case arr.layout:
-  of alPrimitive: result = view 1
-  of alVariableBinary: result = view 2
-  else: raise newException(ValueError, "Layout has no data buffer")
-
-
-func offsetsBuffer[T: int32 | int64](arr: ArrowArray): openArray[T] =
+func offsetsBuffer*[T: int32 | int64](arr: ArrowArray): openArray[T] =
   template view(i: int): untyped = 
     # The offsets buffer contains length + 1 signed integers
     cast[ptr UncheckedArray[T]](arr.carray.bufferList[i]).toOpenArray(0, arr.carray.length.int)
   case arr.layout:
   of offsettableLayouts: result = view 1
   else: raise newException(ValueError, "Layout has no offsets buffer")
+
+
+func dataBuffer*[T](arr: ArrowArray): openArray[T] =
+  template err = raise newException(ValueError, "Layout has no data buffer")
+  template view(i: int, len: int): untyped = 
+    cast[ptr UncheckedArray[T]](arr.carray.bufferList[i]).toOpenArray(0, len)
+  case arr.layout:
+  of alPrimitive: result = view(1, arr.carray.length.int-1)
+  of alVariableBinary: 
+    case arr.typeinfo.kind
+    of tkBinary, tkUtf8: result = view(2, arr.offsetsBuffer[:int32][^1].int)
+    of tkLargeBinary, tkLargeUtf8: result = view(2, arr.offsetsBuffer[:int64][^1].int)
+    else: err()
+  else: err()
 
 
 func item*[T](arr: ArrowArray, i: int): T =
@@ -154,10 +172,10 @@ func items*[T](arr: ArrowArray): openArray[T] =
 func itemBlob*(arr: ArrowArray, i: int): openArray[byte] =
   template view[T](offsetType: typedesc[T]): untyped =
     let
-      offsets = arr.offsetsBuffer[: offsetType]
-      slotPosition = offsets[i]
-      slotLength = offsets[i+1] - slotPosition
-    result = arr.dataBuffer[: byte].toOpenArray(slotPosition.int, slotLength.int-1)
+      offsets = arr.offsetsBuffer[:offsetType]
+      slotStart = offsets[i]
+      slotEnd = offsets[i+1] - 1
+    result = arr.dataBuffer[: byte].toOpenArray(slotStart.int, slotEnd.int)
   case arr.typeinfo.kind
   of tkBinary, tkUtf8: view(int32)
   of tkLargeBinary, tkLargeUtf8: view(int64)
@@ -165,7 +183,13 @@ func itemBlob*(arr: ArrowArray, i: int): openArray[byte] =
 
 
 func isValid*(arr: ArrowArray, i: int): bool =
-  (arr.validityBuffer[i div 8] and (1.byte shl (i mod 8))).bool
+  if arr.carray.nullCount == 0: true
+  else: (arr.validityBuffer[i div 8] and (1.byte shl (i mod 8))).bool
+
+
+iterator itemBlobs*(arr: ArrowArray): openArray[byte] =
+  for i in 0..<arr.carray.length.int:
+    yield arr.itemBlob(i)
 
 
 # --------------------------------------------------------------

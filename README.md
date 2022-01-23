@@ -16,7 +16,7 @@ Apache Arrow implementation in Nim
 
 ### Layouts:
 - [X] handle fixed-size primitive layout
-- [ ] handle variable-size binary Layout
+- [X] handle variable-size binary Layout
 - [ ] handle variable-size List layout
 - [ ] handle fixed-size list layout
 - [ ] handle struct layout

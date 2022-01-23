@@ -1,68 +1,96 @@
-import std/[unittest]
+import std/[sugar, enumerate, random, unittest]
 import nimpy
 import nimpy/py_lib
 import freccia
 
+randomize(987)
 
-
+# Tests rely on pyarrow
 pyInitLibPath("/home/jack/.pyenv/versions/3.10.1/lib/libpython3.10.so.1.0")
-
 var
   py = pyBuiltinsModule()
   pa = pyImport("pyarrow")
 
 
-proc genNumArray[T](_: typedesc[T]): (PyObject, ArrowArray) =
+
+func expectedBufferCount(l: LayoutKind): int =
+  case l
+    of alNull: 0
+    of alFixedList, alStruct, alUnionSparse: 1
+    of alPrimitive, alVariableList, alUnionDense, alDictionary: 2
+    of alVariableBinary: 3
+
+
+# proc genEmptyArray[T](_: typedesc[T]): (PyObject, ArrowArray) =
+#   var
+#     pylist = py.list()
+#     cschema: CSchema
+#     carray: CArray
+#   var years = pa.`array`(newSeq[T](), type=pa.callMethod($T))
+#   discard years.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
+#   let dtype = toType(T)
+#   check parseType($cschema.format) == dtype
+#   check carray.length == 0
+#   check carray.nullCount == 0
+#   check carray.bufferList.len == dtype.layout.expectedBufferCount
+#   check carray.childrenList.len == 0
+#   (pylist, initArrowArray(cschema, carray))
+
+
+proc genPrimitiveArray[T](_: typedesc[T], size: int, nulls: bool): (PyObject, ArrowArray) =
   var
-    pyears = py.list()
+    pylist = py.list()
     cschema: CSchema
     carray: CArray
-  discard pyears.append 1995
-  discard pyears.append 1996
-  discard pyears.append 1997
-  discard pyears.append py.None
-  discard pyears.append 1998
-  discard pyears.append py.None
-  discard pyears.append 2000
-  var years = pa.`array`(pyears, type=pa.callMethod($T))
-  discard years.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
-  let rt =
-    when T is int16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: true))
-    elif T is int32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: true))
-    elif T is int64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: true))
-    elif T is uint16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: false))
-    elif T is uint32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: false))
-    elif T is uint64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: false))
-    elif T is float32: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pSingle))
-    elif T is float64: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pDouble))
-    else: {.error.}
-  check parseType($cschema.format) == rt
-  check carray.length == 7
-  check carray.nullCount == 2
-  check carray.bufferList.len == 2
+  for i in 0..<size:
+    discard pylist.append i.T
+    if nulls: discard pylist.append py.None
+  var pyarray = pa.`array`(pylist, type=pa.callMethod($T))
+  discard pyarray.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
+  let dtype = toType(T)
+  check parseType($cschema.format) == dtype
+  check carray.length == (if nulls: size*2 else: size)
+  check carray.nullCount == (if nulls: size else: 0)
+  check carray.bufferList.len == dtype.layout.expectedBufferCount
   check carray.childrenList.len == 0
-  (pyears, initArrowArray(cschema, carray))
+  (pylist, initArrowArray(cschema, carray))
 
 
-proc genBinaryArray: (PyObject, ArrowArray) =
+proc genBinaryArray(size: int, nulls: bool): (PyObject, ArrowArray) =
+  const strSet = [
+    "monkey", "elephant", "dolphin", "tarantula", "Supercalifragilisticexpialidocious", 
+    "S̶̢̰̟̙̯͎̰͓̉̾̌͌̔̓͋̎̆͛̅͐͊͜u̴̮̦͇̼͙̦̗͑̐͐̏ͅͅp̴̨̝̮̙̔̚͠ê̸͕̥̿̎͋͑̍̿͝ṙ̴̪̳̮̠͇̱̠̀̎́̓̊̀̀̾̀̓̌̿̚͜ͅc̸̤̗̟͊̏̉͜a̶̧̨̟̗̠̟͖͕͕̣̺͇̙̤͊̑͝ͅl̴̛̫̒̂̆̃͗̐͑̄̍̓́͂̀̚i̴̛͖̾̋͑̎̾̈̏͌̒̿̚̚f̶̡̢͎̳͚̙̣̼͖̱̪̺̬́̀̊͋̉͌̇͋͒̄̿̈́͑̔r̴̨̛̛̗̟̙̅͐̿̓͋ǎ̷̙̰̜̭̠̼͑̋̇̌̐̈́͊̄͛̾͠g̸̢̧̯̗͉̘͎͔̉͒́̚i̸̥͍͈̗͍͍͎̘͌̔͊́̎̈́͋̆̕̕l̶̨̛̯̻̯̺̫̊̄̋̀̿̾̄̿̋ĩ̵̪̰̜̺̖̭͕̄̇͊̑̏̄̀̀̑̈́̍̋̚͝ͅs̵̛͖͚̼̀̂̐͐̚t̸̰̋̃̌̀̿̑͌ì̶̘͇͕̬̫̣̼͆̂̂͛͒̚c̶̢̛̲͉͕̮̩̗̼̱̭̘̳̈̑̌̓͝ę̷̪̰͇̬̿̿̉̃̾͜͠x̷̨̟̱͍̩͈̝̆͊́̑͐̕͜͝͝p̵̧̪̭̥͕̘̟̠̽̆̇̑̌̏̏͆͊̈́̈́̒͂̕͝i̶̧̨̦͖̟̼̮̠̠̤̬̺̙̜̓a̵̯̟̫̣͔̯̭͎̪͚̗̗̣͔͚͐̀͋̆͗̔͂̀̈͘l̶̤͎̞̓̂̊͑ͅḭ̷̫̻̖͚͓̦̻̦̱̭̑ͅd̶͈̾̂̎ò̷̧̢͈͖̹̹̭͓̲̐c̷̢̡̬͖̦̳̹̥͇̲̺͊͌͊̓̀̂̓̆̅ͅị̴̢͙̦̜̟̹̹̮́̀̎͑͒̆̈̎̀̀̂̉̕͜͝͝ơ̸̭̘̫̖̹͕͕̯̑͂̆͊̀́̇̋̋̇̈́̎͘͠ů̶̢̨̜̻̞̟̤̓̑s̶̨͇̦̫͙̞̥̽̊̋͗͋͛͛̈̈́̚̚͘", "丂ひｱ乇尺ᄃﾑﾚﾉｷ尺ﾑムﾉﾚﾉ丂ｲﾉᄃ乇ﾒｱﾉﾑﾚﾉりのᄃﾉのひ丂", 
+    "👺☯  Ⓢ𝕦卩ⓔŘc𝐀𝕃ƗⒻℝ卂𝔾Ⓘ𝐋ⒾＳᵗ丨c𝑒𝕩𝔭Ꭵ𝐀Ĺ𝒾𝒹Ỗ𝒸丨𝐨𝔲ᔕ  👽☮"]
   var
-    pyears = py.list()
+    pylist = py.list()
     cschema: CSchema
     carray: CArray
-  discard pyears.append "monkey"
-  discard pyears.append py.None
-  discard pyears.append "elephant"
-  discard pyears.append py.None
-  discard pyears.append "dolphin"
-  discard pyears.append py.None
-  discard pyears.append "tarantula"
-  var years = pa.`array`(pyears)
-  discard years.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
-  (pyears, initArrowArray(cschema, carray))
+  for i in 0..<size:
+    discard pylist.append strSet.sample
+    if nulls: discard pylist.append py.None
+  var pyarray = pa.`array`(pylist)
+  discard pyarray.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
+  let dtype = (if size > 0: toType(string) else: Type(kind: tkNull))
+  check parseType($cschema.format) == dtype
+  check carray.length == (if nulls: size*2 else: size)
+  check carray.nullCount == (if nulls: size else: 0)
+  check carray.bufferList.len == dtype.layout.expectedBufferCount
+  check carray.childrenList.len == 0
+  (pylist, initArrowArray(cschema, carray))
 
 
+proc toString(bytes: openArray[byte]): string =
+  if bytes.len > 0:
+    result = newString(bytes.len)
+    copyMem(result[0].addr, bytes[0].unsafeAddr, bytes.len)
+  else:
+    result = ""
 
-test "parser":
+
+# ------------------------------------------------------------------
+
+
+test "dtype format parsing":
   check parseType("d:12,20") == Type(kind: tkDecimal, decimalMeta: Decimal(precision: 12, scale: 20, bitWidth: 128))
   check parseType("d:19,10,256") == Type(kind: tkDecimal, decimalMeta: Decimal(precision: 19, scale: 10, bitWidth: 256))
   check parseType("w:42") == Type(kind: tkFixedSizeBinary, fixedSizeBinaryMeta: FixedSizeBinary(byteWidth: 42))
@@ -78,12 +106,11 @@ test "parser":
   check parseType("+ud:123,2,31,4000,5123") == Type(kind: tkUnion, unionMeta: Union(mode: umDense, typeIds: @[123.int32, 2, 31, 4000, 5123]))
 
 
-
 # https://github.com/apache/arrow/blob/97879eb970bac52d93d2247200b9ca7acf6f3f93/python/pyarrow/tests/test_cffi.py#L109
 # https://github.com/apache/arrow/blob/488f084280fa5e2acea76dcb02dd0c3ee655f55b/python/pyarrow/array.pxi#L1312
-template genTestType[T](typ:typedesc[T]): untyped =
-  test "Primitive " & $typ:
-    let (pylist, aarray) = genNumArray(typ)
+template genPrimitiveTestAux[T](typ:typedesc[T], title: string, size: int, nulls: bool, f: untyped): untyped =
+  test title:
+    let (pylist, aarray) = f(typ, size, nulls)
     check aarray.layout == alPrimitive
     for i, v in aarray.items[:typ]:
       var pyObj = pylist[i]
@@ -96,26 +123,39 @@ template genTestType[T](typ:typedesc[T]): untyped =
         check pv == v # https://github.com/nim-lang/Nim/issues/19426
         check pv == aarray.item[:typ](i)
         check pv == aarray.item(i, typ)
-genTestType(int16)
-genTestType(int32)
-genTestType(int64)
-genTestType(uint16)
-genTestType(uint32)
-genTestType(uint64)
-genTestType(float32)
-genTestType(float64)
+
+template genPrimitiveTest[T](typ:typedesc[T]): untyped =
+  genPrimitiveTestAux(typ, "primitive layout " & $typ & " empty", 0, false, genPrimitiveArray)
+  genPrimitiveTestAux(typ, "primitive layout " & $typ, 10, true, genPrimitiveArray)
+  genPrimitiveTestAux(typ, "primitive layout " & $typ & " nulls", 10, true, genPrimitiveArray)
+  
+genPrimitiveTest(int16)
+genPrimitiveTest(int32)
+genPrimitiveTest(int64)
+genPrimitiveTest(uint16)
+genPrimitiveTest(uint32)
+genPrimitiveTest(uint64)
+genPrimitiveTest(float32)
+genPrimitiveTest(float64)
 
 
-test "Variable binary":
-  let (pylist, aarray) = genBinaryArray()
-  echo pylist
-  echo aarray
-  for i in aarray.itemBlob(0):
-    echo char(i)
-  #let foo: aarray.typeinfo.kind.offsetBitWidth
-  #let offsets = cast[ptr UncheckedArray[aarray.typeinfo.kind.offsetBitWidth]](aarray.carray.bufferList[1])
-  #for i in 0..aarray.carray.length:
-  #  echo offsets[i]
+template genVariableBinaryTest(title: string, size: int, nulls: bool, f: untyped): untyped =
+  test title:
+    let (pylist, aarray) = f(size, nulls)
+    for i, blob in enumerate aarray.itemBlobs:
+      var pyObj = pylist[i]
+      if pyObj == py.None:
+        check blob.len == 0
+        check not aarray.isValid(i)
+      else:
+        let pv = pyObj.to(string)
+        check aarray.isValid(i)
+        check pv == blob.toString
+
+genVariableBinaryTest("variable binary layout empty", 0, false, genBinaryArray)
+genVariableBinaryTest("variable binary layout", 10, false, genBinaryArray)
+genVariableBinaryTest("variable binary layout nulls", 10, true, genBinaryArray)
+
 
 
 # producers
