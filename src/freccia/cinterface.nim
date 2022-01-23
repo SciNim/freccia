@@ -1,7 +1,4 @@
-{.experimental: "views".}
-
-
-import std/[strformat]
+import std/[strformat, strutils]
 
 # From https://arrow.apache.org/docs/format/CDataInterface.html
 
@@ -39,31 +36,34 @@ type
 
   CBaseStructure* = CSchema | CArray
 
-
-
-func `$`*(abs: CBaseStructure): string =
-  result &= $abs.type & "\n"
+  
+func toString(abs: CBaseStructure): string =
+  template append(s: string): untyped = result &= s.indent(2) & "\n"
+  append $abs.type
   when abs is CSchema:
-    result &= &"format: {abs.format} ({($abs.format).parseType})\n"
-    result &= &"name: {abs.name}\n"
-    result &= &"metadata.isNil: {abs.metadata.isNil}\n"
-    result &= &"flags: {abs.flags}\n"
+    append &"format: {abs.format} ({($abs.format).parseType})"
+    append &"name: {abs.name}"
+    append &"metadata.isNil: {abs.metadata.isNil}"
+    append &"flags: {abs.flags}"
   when abs is CArray:
-    result &= &"length: {abs.length}\n"
-    result &= &"nullCount: {abs.nullCount}\n"
-    result &= &"offset: {abs.offset}\n"
-    result &= &"nBuffers: {abs.nBuffers}\n"
+    append &"length: {abs.length}"
+    append &"nullCount: {abs.nullCount}"
+    append &"offset: {abs.offset}"
+    append &"nBuffers: {abs.nBuffers}"
     for i, buffer in abs.bufferList:
-      result &= &"buffer[{i}]: {repr buffer}\n"
-  result &= &"nChildren: {abs.nChildren}\n"
+      append &"buffer[{i}]: {repr buffer}"
+  append &"dictionary.isNil: {abs.dictionary.isNil}"
+  if not abs.dictionary.isNil:
+    append &"dictionary: {abs.dictionary[]}"
+  append &"release.isNil: {abs.release.isNil}"
+  append &"privateData.isNil: {abs.privateData.isNil}"
+  append &"nChildren: {abs.nChildren}"
   for i, child in abs.childrenList:
     if not child.isNil:
-      result &= &"child[{i}]: {child[]}\n"
-  result &= &"dictionary.isNil: {abs.dictionary.isNil}\n"
-  if not abs.dictionary.isNil:
-    result &= &"dictionary: {abs.dictionary[]}\n"
-  result &= &"release.isNil: {abs.release.isNil}\n"
-  result &= &"privateData.isNil: {abs.privateData.isNil}\n"
+      append &"child[{i}]: \n{child[]}"
+
+
+func `$`*(abs: CBaseStructure): string = abs.toString()
 
 
 func childrenList*(abs: CBaseStructure): openArray[ptr CBaseStructure] =

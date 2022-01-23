@@ -50,9 +50,10 @@ type
     alNull = "null sequence"
     alDictionary = "dictionary encoded"
   ArrowArray* = object
-    cschema*: CSchema
-    carray*: CArray
-    typeinfo*: Type
+    cschema: CSchema
+    carray: CArray
+    typeinfo: Type
+    children: seq[ArrowArray]
 
 
 const 
@@ -62,6 +63,24 @@ const
   validableLayouts = {alPrimitive, alVariableBinary, alVariableList, alFixedList, alStruct, alDictionary}
   offsettableLayouts = {alVariableBinary, alVariableList, alUnionDense}
   
+  
+# --------------------------------------------------------------
+
+
+proc initArrowArray*(cschema: CSchema, carray: CArray): ArrowArray =
+  assert cschema.nChildren == carray.nChildren
+  let typeinfo = ($cschema.format).parseType
+  let children = collect(newSeqOfCap(cschema.nChildren)):
+    for i in 0..<cschema.nChildren.int:
+      initArrowArray(cschema.children[i][], carray.children[i][])
+  result = ArrowArray(cschema: cschema, carray: carray, typeinfo: typeinfo, children: children)
+    
+
+
+proc `$`*(arr: ArrowArray): string =
+  $arr.cschema & "\n\n" & $arr.carray
+
+
 
 # --------------------------------------------------------------
 
@@ -124,6 +143,9 @@ func layout*(arr: ArrowArray): LayoutKind =
   arr.typeinfo.layout
 
 
+# --------------------------------------------------------------
+
+
 func validityBuffer*(arr: ArrowArray): openArray[byte] =
   template view(i: int): untyped = 
     cast[ptr UncheckedArray[byte]](arr.carray.bufferList[i]).toOpenArray(0, arr.carray.length.int-1)
@@ -155,6 +177,14 @@ func dataBuffer*[T](arr: ArrowArray): openArray[T] =
   else: err()
 
 
+# --------------------------------------------------------------
+
+
+func isValid*(arr: ArrowArray, i: int): bool =
+  if arr.carray.nullCount == 0: true
+  else: (arr.validityBuffer[i div 8] and (1.byte shl (i mod 8))).bool
+
+
 func item*[T](arr: ArrowArray, i: int): T =
   case arr.layout
   of alPrimitive: arr.dataBuffer[: T][i]
@@ -169,32 +199,38 @@ func items*[T](arr: ArrowArray): openArray[T] =
   arr.dataBuffer[:T]
 
 
-func itemBlob*(arr: ArrowArray, i: int): openArray[byte] =
+# openArray[openArray[byte]] not possible?
+func blob*(arr: ArrowArray, i: int): openArray[byte] =
   template view[T](offsetType: typedesc[T]): untyped =
     let
       offsets = arr.offsetsBuffer[:offsetType]
       slotStart = offsets[i]
       slotEnd = offsets[i+1] - 1
-    result = arr.dataBuffer[: byte].toOpenArray(slotStart.int, slotEnd.int)
+    result = arr.dataBuffer[:byte].toOpenArray(slotStart.int, slotEnd.int)
   case arr.typeinfo.kind
   of tkBinary, tkUtf8: view(int32)
   of tkLargeBinary, tkLargeUtf8: view(int64)
   else: raise newException(ValueError, "Unable to get item")
 
 
-func isValid*(arr: ArrowArray, i: int): bool =
-  if arr.carray.nullCount == 0: true
-  else: (arr.validityBuffer[i div 8] and (1.byte shl (i mod 8))).bool
-
-
-iterator itemBlobs*(arr: ArrowArray): openArray[byte] =
+iterator blobs*(arr: ArrowArray): openArray[byte] =
   for i in 0..<arr.carray.length.int:
-    yield arr.itemBlob(i)
+    yield arr.blob(i)
+
+
+func child*(arr: ArrowArray, i: int): ArrowArray =
+  arr.children[i]
+
+
+# https://github.com/nim-lang/Nim/issues/19435
+# func children*(arr: ArrowArray): openArray[ArrowArray] =
+#   arr.children.toOpenArray(0, arr.children.len-1)
+iterator children*(arr: ArrowArray): ArrowArray =
+  for child in arr.children:
+    yield child
 
 
 # --------------------------------------------------------------
 
 
-proc initArrowArray*(cschema: CSchema, carray: CArray): ArrowArray =
-  let typeinfo = ($cschema.format).parseType 
-  ArrowArray(cschema: cschema, carray: carray, typeinfo: typeinfo)
+

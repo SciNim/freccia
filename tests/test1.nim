@@ -21,20 +21,15 @@ func expectedBufferCount(l: LayoutKind): int =
     of alVariableBinary: 3
 
 
-# proc genEmptyArray[T](_: typedesc[T]): (PyObject, ArrowArray) =
-#   var
-#     pylist = py.list()
-#     cschema: CSchema
-#     carray: CArray
-#   var years = pa.`array`(newSeq[T](), type=pa.callMethod($T))
-#   discard years.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
-#   let dtype = toType(T)
-#   check parseType($cschema.format) == dtype
-#   check carray.length == 0
-#   check carray.nullCount == 0
-#   check carray.bufferList.len == dtype.layout.expectedBufferCount
-#   check carray.childrenList.len == 0
-#   (pylist, initArrowArray(cschema, carray))
+proc check(cschema: CSchema, dtype: Type) =
+  check parseType($cschema.format) == dtype
+  
+
+proc check(carray: CArray, dtype: Type, size: int, nulls: bool) =
+  check carray.length == (if nulls: size*2 else: size)
+  check carray.nullCount == (if nulls: size else: 0)
+  check carray.bufferList.len == dtype.layout.expectedBufferCount
+  check carray.childrenList.len == 0
 
 
 proc genPrimitiveArray[T](_: typedesc[T], size: int, nulls: bool): (PyObject, ArrowArray) =
@@ -48,11 +43,8 @@ proc genPrimitiveArray[T](_: typedesc[T], size: int, nulls: bool): (PyObject, Ar
   var pyarray = pa.`array`(pylist, type=pa.callMethod($T))
   discard pyarray.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
   let dtype = toType(T)
-  check parseType($cschema.format) == dtype
-  check carray.length == (if nulls: size*2 else: size)
-  check carray.nullCount == (if nulls: size else: 0)
-  check carray.bufferList.len == dtype.layout.expectedBufferCount
-  check carray.childrenList.len == 0
+  cschema.check(dtype)
+  carray.check(dtype, size, nulls)
   (pylist, initArrowArray(cschema, carray))
 
 
@@ -71,11 +63,27 @@ proc genBinaryArray(size: int, nulls: bool): (PyObject, ArrowArray) =
   var pyarray = pa.`array`(pylist)
   discard pyarray.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
   let dtype = (if size > 0: toType(string) else: Type(kind: tkNull))
-  check parseType($cschema.format) == dtype
-  check carray.length == (if nulls: size*2 else: size)
-  check carray.nullCount == (if nulls: size else: 0)
-  check carray.bufferList.len == dtype.layout.expectedBufferCount
-  check carray.childrenList.len == 0
+  cschema.check(dtype)
+  carray.check(dtype, size, nulls)
+  (pylist, initArrowArray(cschema, carray))
+
+
+proc genVariableListArray(size: int, nulls: bool): (PyObject, ArrowArray) =
+  proc genlist(): PyObject =
+    let pylist = py.list()
+    discard pylist.append 1
+    discard pylist.append 2
+    discard pylist.append 3
+    pylist
+  var
+    pylist = py.list()
+    cschema: CSchema
+    carray: CArray
+  for i in 0..<size:
+    discard pylist.append py.list([genlist(),py.None,genlist()])
+    if nulls: discard pylist.append py.None
+  var pyarray = pa.`array`(pylist)
+  discard pyarray.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
   (pylist, initArrowArray(cschema, carray))
 
 
@@ -130,19 +138,20 @@ template genPrimitiveTest[T](typ:typedesc[T]): untyped =
   genPrimitiveTestAux(typ, "primitive layout " & $typ & " nulls", 10, true, genPrimitiveArray)
   
 genPrimitiveTest(int16)
-genPrimitiveTest(int32)
-genPrimitiveTest(int64)
-genPrimitiveTest(uint16)
-genPrimitiveTest(uint32)
-genPrimitiveTest(uint64)
-genPrimitiveTest(float32)
-genPrimitiveTest(float64)
+when not defined(skipSlowTests):
+  genPrimitiveTest(int32)
+  genPrimitiveTest(int64)
+  genPrimitiveTest(uint16)
+  genPrimitiveTest(uint32)
+  genPrimitiveTest(uint64)
+  genPrimitiveTest(float32)
+  genPrimitiveTest(float64)
 
 
 template genVariableBinaryTest(title: string, size: int, nulls: bool, f: untyped): untyped =
   test title:
     let (pylist, aarray) = f(size, nulls)
-    for i, blob in enumerate aarray.itemBlobs:
+    for i, blob in enumerate aarray.blobs:
       var pyObj = pylist[i]
       if pyObj == py.None:
         check blob.len == 0
@@ -152,9 +161,20 @@ template genVariableBinaryTest(title: string, size: int, nulls: bool, f: untyped
         check aarray.isValid(i)
         check pv == blob.toString
 
+
 genVariableBinaryTest("variable binary layout empty", 0, false, genBinaryArray)
 genVariableBinaryTest("variable binary layout", 10, false, genBinaryArray)
 genVariableBinaryTest("variable binary layout nulls", 10, true, genBinaryArray)
+
+
+test "variable list layout":
+  let (pylist, aarray) = genVariableListArray(1, true)
+  echo pylist
+  echo aarray
+  #for child in aarray.children:
+  #  echo "AAAAA"
+  #  dump child
+  #dump aarray.children[0]
 
 
 
