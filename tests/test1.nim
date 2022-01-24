@@ -1,4 +1,4 @@
-import std/[sugar, enumerate, random, unittest]
+import std/[sugar, random, unittest]
 import nimpy
 import nimpy/py_lib
 import freccia
@@ -7,7 +7,7 @@ randomize(987)
 
 # Tests rely on pyarrow
 pyInitLibPath("/home/jack/.pyenv/versions/3.10.1/lib/libpython3.10.so.1.0")
-var
+let
   py = pyBuiltinsModule()
   pa = pyImport("pyarrow")
 
@@ -32,17 +32,17 @@ proc check(carray: CArray, dtype: Type, size: int, nulls: bool) =
   check carray.childrenList.len == 0
 
 
-proc genPrimitiveArray(typeArg: typedesc, size: int, nulls: bool): (PyObject, ArrowArray) =
+proc genPrimitiveArray(T: typedesc, size: int, nulls: bool): (PyObject, ArrowArray) =
   var
     pylist = py.list()
     cschema: CSchema
     carray: CArray
   for i in 0..<size:
-    discard pylist.append i.typeArg
+    discard pylist.append i.T
     if nulls: discard pylist.append py.None
-  var pyarray = pa.`array`(pylist, type=pa.callMethod($typeArg))
+  var pyarray = pa.`array`(pylist, type=pa.callMethod($T))
   discard pyarray.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
-  let dtype = toType(typeArg)
+  let dtype = toType(T)
   cschema.check(dtype)
   carray.check(dtype, size, nulls)
   (pylist, initArrowArray(cschema, carray))
@@ -116,26 +116,36 @@ test "dtype format parsing":
 
 # https://github.com/apache/arrow/blob/97879eb970bac52d93d2247200b9ca7acf6f3f93/python/pyarrow/tests/test_cffi.py#L109
 # https://github.com/apache/arrow/blob/488f084280fa5e2acea76dcb02dd0c3ee655f55b/python/pyarrow/array.pxi#L1312
-template genPrimitiveTestAux(t:typedesc, title: string, size: int, nulls: bool, f: untyped): untyped =
+proc genPrimitiveTestAux(T:typedesc, title: string, size: int, nulls: bool) =
   test title:
-    let (pylist, aarray) = f(t, size, nulls)
-    check aarray.layout == alPrimitive
-    for i, v in aarray.items[:t]:
-      var pyObj = pylist[i]
-      if pyObj == py.None:
-        check v == 0 # not strictly required
-        check not aarray.isValid(i)
-      else:
-        let pv = pyObj.to(t)
-        check aarray.isValid(i)
-        check pv == v # https://github.com/nim-lang/Nim/issues/19426
-        check pv == aarray.item[:t](i)
-        check pv == aarray.item(i, t)
+    let
+      sliceLow = size div 4
+      sliceHigh = size div 2
+      (pylist, aarray) = genPrimitiveArray(T, size, nulls)
+      asliced = aarray.slice(sliceLow, sliceHigh)
+      pysliced = pylist[py.callMethod("slice", sliceLow, sliceHigh + 1)]
+    for (aa,pa) in [(aarray, pylist), (asliced, pysliced)]:
+      let
+        pylen = py.callMethod("len", pa).to(int)
+      check aa.len == pylen
+      check aa.low == 0
+      check aa.high == pylen-1
+      for i in 0..pylen-1:
+        let 
+          pyObj = pa[i]
+          aVal = aa.item(i, T)
+        if pyObj == py.None:
+          check aVal == 0 # not strictly required
+          check not aarray.isValid(i)
+        else:
+          let pv = pyObj.to(T)
+          check aarray.isValid(i)
+          check pv == aVal # https://github.com/nim-lang/Nim/issues/19426
 
-template genPrimitiveTest(typeArg:typedesc): untyped =
-  genPrimitiveTestAux(typeArg, "primitive layout " & $typeArg & " empty", 0, false, genPrimitiveArray)
-  genPrimitiveTestAux(typeArg, "primitive layout " & $typeArg, 10, true, genPrimitiveArray)
-  genPrimitiveTestAux(typeArg, "primitive layout " & $typeArg & " nulls", 10, true, genPrimitiveArray)
+proc genPrimitiveTest(T: typedesc) =
+  genPrimitiveTestAux(T, "primitive layout " & $T & " empty", 0, false)
+  genPrimitiveTestAux(T, "primitive layout " & $T, 10, true)
+  genPrimitiveTestAux(T, "primitive layout " & $T & " nulls", 10, true)
   
 genPrimitiveTest(int16)
 when not defined(skipSlowTests):
@@ -148,46 +158,48 @@ when not defined(skipSlowTests):
   genPrimitiveTest(float64)
 
 
-template genVariableBinaryTest(title: string, size: int, nulls: bool, f: untyped): untyped =
+proc genVariableBinaryTest(title: string, size: int, nulls: bool) =
   test title:
-    let (pylist, aarray) = f(size, nulls)
-    for i, blob in enumerate aarray.blobs:
-      var pyObj = pylist[i]
-      if pyObj == py.None:
-        check blob.len == 0
-        check not aarray.isValid(i)
-      else:
-        let pv = pyObj.to(string)
-        check aarray.isValid(i)
-        check pv == blob.toString
+    let
+      sliceLow = size div 4
+      sliceHigh = size div 2
+      (pylist, aarray) = genBinaryArray(size, nulls)
+      asliced = aarray.slice(sliceLow, sliceHigh)
+      pysliced = pylist[py.callMethod("slice", sliceLow, sliceHigh + 1)]
+    for (aa,pa) in [(aarray, pylist), (asliced, pysliced)]:
+      let
+        pylen = py.len(pa).to(int)
+      check aa.len == pylen
+      check aa.low == 0
+      check aa.high == pylen-1
+      for i in 0..pylen-1:
+        let 
+          pyObj = pa[i]
+          blob = aa.item(i, openArray[byte])
+        if pyObj == py.None:
+          check blob.len == 0
+          check not aarray.isValid(i)
+        else:
+          let pv = pyObj.to(string)
+          check aarray.isValid(i)
+          check pv == blob.toString
 
-
-genVariableBinaryTest("variable binary layout empty", 0, false, genBinaryArray)
-genVariableBinaryTest("variable binary layout", 10, false, genBinaryArray)
-genVariableBinaryTest("variable binary layout nulls", 10, true, genBinaryArray)
-
-
-test "variable list layout":
-  let (pylist, aarray) = genVariableListArray(1, true)
-  echo pylist
-  echo aarray
-  #for child in aarray.children:
-  #  echo "AAAAA"
-  #  dump child
-  #dump aarray.children[0]
-
-
-
-# producers
-test "do the stack":
-  var s = CSchema()
-  exportInt32Type(s.addr)
-  s.rootRelease()
+genVariableBinaryTest("variable binary layout empty", 0, false)
+genVariableBinaryTest("variable binary layout", 10, false)
+genVariableBinaryTest("variable binary layout nulls", 10, true)
 
 
 
-test "do the heap":
-  var s: ptr CSchema = cast[ptr CSchema](alloc(CSchema.sizeof))
-  exportInt32Type(s)
-  s[].rootRelease()
-  dealloc(s)
+# # producers TODO
+# test "produce [stack]":
+#   var s = CSchema()
+#   exportInt32Type(s.addr)
+#   s.rootRelease()
+
+
+
+# test "produce [heap]":
+#   var s: ptr CSchema = cast[ptr CSchema](alloc(CSchema.sizeof))
+#   exportInt32Type(s)
+#   s[].rootRelease()
+#   dealloc(s)

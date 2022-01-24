@@ -51,9 +51,10 @@ type
     alDictionary = "dictionary encoded"
   ArrowArray* = object
     cschema: CSchema
-    carray: CArray
+    carray*: CArray
     typeinfo: Type
-    children: seq[ArrowArray]
+    # children: seq[ArrowArray]
+    viewStart, viewLen: int
 
 
 const 
@@ -70,31 +71,52 @@ const
 proc initArrowArray*(cschema: CSchema, carray: CArray): ArrowArray =
   assert cschema.nChildren == carray.nChildren
   let typeinfo = ($cschema.format).parseType
-  let children = collect(newSeqOfCap(cschema.nChildren)):
-    for i in 0..<cschema.nChildren.int:
-      initArrowArray(cschema.children[i][], carray.children[i][])
-  result = ArrowArray(cschema: cschema, carray: carray, typeinfo: typeinfo, children: children)
+  #let children = collect(newSeqOfCap(cschema.nChildren)):
+  #  for i in 0..<cschema.nChildren.int:
+  #    initArrowArray(cschema.children[i][], carray.children[i][])
+  result = ArrowArray(
+    cschema: cschema, 
+    carray: carray, 
+    typeinfo: typeinfo,
+    #children: children,
+    viewStart: 0,
+    viewLen: carray.length.int
+  )
     
 
+func viewLow(arr: ArrowArray): int = arr.viewStart
+func viewHigh(arr: ArrowArray): int = (arr.viewStart + arr.viewLen) - 1
+func len*(arr: ArrowArray): int = arr.viewLen
+func low*(arr: ArrowArray): int = 0
+func high*(arr: ArrowArray): int = arr.len - 1
+func `$`*(arr: ArrowArray): string = $arr.cschema & "\n\n" & $arr.carray
 
-proc `$`*(arr: ArrowArray): string =
-  $arr.cschema & "\n\n" & $arr.carray
 
+# proc slice*(arr: ArrowArray, start: int, len: int): ArrowArray =
+#   var copy = arr
+#   copy.viewStart += start
+#   copy.viewLen = len
+#   copy
+proc slice*(arr: ArrowArray, low: int, high: int): ArrowArray =
+  var copy = arr
+  copy.viewStart += low
+  copy.viewLen = min((high-low) + 1, arr.carray.length.int)
+  copy
 
 
 # --------------------------------------------------------------
 
 
-template toType*(typeArg: typedesc): Type =
-  when typeArg is int16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: true))
-  elif typeArg is int32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: true))
-  elif typeArg is int64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: true))
-  elif typeArg is uint16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: false))
-  elif typeArg is uint32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: false))
-  elif typeArg is uint64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: false))
-  elif typeArg is float32: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pSingle))
-  elif typeArg is float64: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pDouble))
-  elif typeArg is string: Type(kind: tkUtf8, utf8Meta: Utf8())
+template toType*(T: typedesc): Type =
+  when T is int16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: true))
+  elif T is int32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: true))
+  elif T is int64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: true))
+  elif T is uint16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: false))
+  elif T is uint32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: false))
+  elif T is uint64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: false))
+  elif T is float32: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pSingle))
+  elif T is float64: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pDouble))
+  elif T is string: Type(kind: tkUtf8, utf8Meta: Utf8())
   else: {.error.}
 
 
@@ -165,8 +187,8 @@ func offsetsBuffer*[T: int32 | int64](arr: ArrowArray): openArray[T] =
 
 func dataBuffer*[T](arr: ArrowArray): openArray[T] =
   template err = raise newException(ValueError, "Layout has no data buffer")
-  template view(i: int, len: int): untyped = 
-    cast[ptr UncheckedArray[T]](arr.carray.bufferList[i]).toOpenArray(0, len)
+  template view(i: int, high: int): untyped = 
+    cast[ptr UncheckedArray[T]](arr.carray.bufferList[i]).toOpenArray(0, high)
   case arr.layout:
   of alPrimitive: result = view(1, arr.carray.length.int-1)
   of alVariableBinary: 
@@ -180,57 +202,44 @@ func dataBuffer*[T](arr: ArrowArray): openArray[T] =
 # --------------------------------------------------------------
 
 
-func isValid*(arr: ArrowArray, i: int): bool =
-  if arr.carray.nullCount == 0: true
-  else: (arr.validityBuffer[i div 8] and (1.byte shl (i mod 8))).bool
+func getItem[T](arr: ArrowArray, i: int): T =
 
-
-func item*[T](arr: ArrowArray, i: int): T =
-  case arr.layout
-  of alPrimitive: arr.dataBuffer[: T][i]
-  else: raise newException(ValueError, "Unable to get item")
-
-
-func item*(arr: ArrowArray, i: int, itemType: typedesc): itemType =
-  arr.item[:itemType](i)
-
-
-func items*[T](arr: ArrowArray): openArray[T] =
-  arr.dataBuffer[:T]
-
-
-# openArray[openArray[byte]] not possible?
-func blob*(arr: ArrowArray, i: int): openArray[byte] =
-  template view(offsetType: typedesc): untyped =
+  func offsetView(arr: ArrowArray, T: typedesc, i: int): openArray[byte] =
     let
-      offsets = arr.offsetsBuffer[:offsetType]
+      offsets = arr.offsetsBuffer[:T]
       slotStart = offsets[i]
       slotEnd = offsets[i+1] - 1
     result = arr.dataBuffer[:byte].toOpenArray(slotStart.int, slotEnd.int)
-  case arr.typeinfo.kind
-  of tkBinary, tkUtf8: view(int32)
-  of tkLargeBinary, tkLargeUtf8: view(int64)
-  else: raise newException(ValueError, "Unable to get item")
+
+  template err = raise newException(ValueError, "Unable to get item")
+
+  when T is openArray[byte]:
+    if arr.layout == alVariableBinary:
+      case arr.typeinfo.kind
+      of tkBinary, tkUtf8: result = arr.offsetView(int32, i)
+      of tkLargeBinary, tkLargeUtf8: result = arr.offsetView(int64, i)
+      else: err()
+    else: err()
+  else:
+    if arr.layout == alPrimitive:
+      result = arr.dataBuffer[:T][i]
+    else: err()
 
 
-iterator blobs*(arr: ArrowArray): openArray[byte] =
-  for i in 0..<arr.carray.length.int:
-    yield arr.blob(i)
+func item*[T](arr: ArrowArray, i: int): T = arr.getItem[:T](arr.viewStart + i)
+func item*(arr: ArrowArray, i: int, T: typedesc): T = arr.getItem[:T](arr.viewStart + i)
 
 
-func child*(arr: ArrowArray, i: int): ArrowArray =
-  arr.children[i]
+iterator items*[T](arr: ArrowArray): T = 
+  for i in arr.viewLow..arr.viewHigh: yield arr.getItem[:T](i)
+iterator items*(arr: ArrowArray, T: typedesc): T = 
+  for i in arr.viewLow..arr.viewHigh: yield arr.getItem[:T](i)
 
 
-# https://github.com/nim-lang/Nim/issues/19435
-# func children*(arr: ArrowArray): openArray[ArrowArray] =
-#   arr.children.toOpenArray(0, arr.children.len-1)
-iterator children*(arr: ArrowArray): ArrowArray =
-  for child in arr.children:
-    yield child
-
+func isValid*(arr: ArrowArray, i: int): bool =
+  if arr.carray.nullCount == 0: result = true
+  else: 
+    let i = arr.viewStart + i
+    result = (arr.validityBuffer[i div 8] and (1.byte shl (i mod 8))).bool
 
 # --------------------------------------------------------------
-
-
-

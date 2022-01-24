@@ -52,11 +52,11 @@ func toString(abs: CBaseStructure): string =
     append &"nBuffers: {abs.nBuffers}"
     for i, buffer in abs.bufferList:
       append &"buffer[{i}]: {repr buffer}"
-  append &"dictionary.isNil: {abs.dictionary.isNil}"
+  # append &"dictionary: {repr abs.dictionary}"
   if not abs.dictionary.isNil:
     append &"dictionary: {abs.dictionary[]}"
-  append &"release.isNil: {abs.release.isNil}"
-  append &"privateData.isNil: {abs.privateData.isNil}"
+  append &"release: {repr abs.release}"
+  append &"privateData: {repr abs.privateData}"
   append &"nChildren: {abs.nChildren}"
   for i, child in abs.childrenList:
     if not child.isNil:
