@@ -85,16 +85,16 @@ proc `$`*(arr: ArrowArray): string =
 # --------------------------------------------------------------
 
 
-template toType*[T](_: typedesc[T]): Type =
-  when T is int16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: true))
-  elif T is int32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: true))
-  elif T is int64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: true))
-  elif T is uint16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: false))
-  elif T is uint32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: false))
-  elif T is uint64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: false))
-  elif T is float32: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pSingle))
-  elif T is float64: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pDouble))
-  elif T is string: Type(kind: tkUtf8, utf8Meta: Utf8())
+template toType*(typeArg: typedesc): Type =
+  when typeArg is int16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: true))
+  elif typeArg is int32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: true))
+  elif typeArg is int64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: true))
+  elif typeArg is uint16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: false))
+  elif typeArg is uint32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: false))
+  elif typeArg is uint64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: false))
+  elif typeArg is float32: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pSingle))
+  elif typeArg is float64: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pDouble))
+  elif typeArg is string: Type(kind: tkUtf8, utf8Meta: Utf8())
   else: {.error.}
 
 
@@ -124,15 +124,15 @@ func `==`*(a: Type, b: Type): bool =
   )
 
 
-func layout*(t: Type): LayoutKind =
-  case t.kind:
+func layout*(dtype: Type): LayoutKind =
+  case dtype.kind:
   of fixedSizeTypes: alPrimitive
   of variableSizeTypes: alVariableBinary
   of listTypes: alVariableList
   of tkFixedSizeList: alFixedList
   of tkStruct: alStruct
   of tkUnion: 
-    case t.unionMeta.mode:
+    case dtype.unionMeta.mode:
       of umSparse: alUnionSparse
       of umDense: alUnionDense
   of tkNull: alNull
@@ -191,8 +191,8 @@ func item*[T](arr: ArrowArray, i: int): T =
   else: raise newException(ValueError, "Unable to get item")
 
 
-func item*[T](arr: ArrowArray, i: int, typ: typedesc[T]): T =
-  arr.item[: T](i)
+func item*(arr: ArrowArray, i: int, itemType: typedesc): itemType =
+  arr.item[:itemType](i)
 
 
 func items*[T](arr: ArrowArray): openArray[T] =
@@ -201,7 +201,7 @@ func items*[T](arr: ArrowArray): openArray[T] =
 
 # openArray[openArray[byte]] not possible?
 func blob*(arr: ArrowArray, i: int): openArray[byte] =
-  template view[T](offsetType: typedesc[T]): untyped =
+  template view(offsetType: typedesc): untyped =
     let
       offsets = arr.offsetsBuffer[:offsetType]
       slotStart = offsets[i]

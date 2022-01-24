@@ -32,17 +32,17 @@ proc check(carray: CArray, dtype: Type, size: int, nulls: bool) =
   check carray.childrenList.len == 0
 
 
-proc genPrimitiveArray[T](_: typedesc[T], size: int, nulls: bool): (PyObject, ArrowArray) =
+proc genPrimitiveArray(typeArg: typedesc, size: int, nulls: bool): (PyObject, ArrowArray) =
   var
     pylist = py.list()
     cschema: CSchema
     carray: CArray
   for i in 0..<size:
-    discard pylist.append i.T
+    discard pylist.append i.typeArg
     if nulls: discard pylist.append py.None
-  var pyarray = pa.`array`(pylist, type=pa.callMethod($T))
+  var pyarray = pa.`array`(pylist, type=pa.callMethod($typeArg))
   discard pyarray.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
-  let dtype = toType(T)
+  let dtype = toType(typeArg)
   cschema.check(dtype)
   carray.check(dtype, size, nulls)
   (pylist, initArrowArray(cschema, carray))
@@ -116,26 +116,26 @@ test "dtype format parsing":
 
 # https://github.com/apache/arrow/blob/97879eb970bac52d93d2247200b9ca7acf6f3f93/python/pyarrow/tests/test_cffi.py#L109
 # https://github.com/apache/arrow/blob/488f084280fa5e2acea76dcb02dd0c3ee655f55b/python/pyarrow/array.pxi#L1312
-template genPrimitiveTestAux[T](typ:typedesc[T], title: string, size: int, nulls: bool, f: untyped): untyped =
+template genPrimitiveTestAux(t:typedesc, title: string, size: int, nulls: bool, f: untyped): untyped =
   test title:
-    let (pylist, aarray) = f(typ, size, nulls)
+    let (pylist, aarray) = f(t, size, nulls)
     check aarray.layout == alPrimitive
-    for i, v in aarray.items[:typ]:
+    for i, v in aarray.items[:t]:
       var pyObj = pylist[i]
       if pyObj == py.None:
         check v == 0 # not strictly required
         check not aarray.isValid(i)
       else:
-        let pv = pyObj.to(typ)
+        let pv = pyObj.to(t)
         check aarray.isValid(i)
         check pv == v # https://github.com/nim-lang/Nim/issues/19426
-        check pv == aarray.item[:typ](i)
-        check pv == aarray.item(i, typ)
+        check pv == aarray.item[:t](i)
+        check pv == aarray.item(i, t)
 
-template genPrimitiveTest[T](typ:typedesc[T]): untyped =
-  genPrimitiveTestAux(typ, "primitive layout " & $typ & " empty", 0, false, genPrimitiveArray)
-  genPrimitiveTestAux(typ, "primitive layout " & $typ, 10, true, genPrimitiveArray)
-  genPrimitiveTestAux(typ, "primitive layout " & $typ & " nulls", 10, true, genPrimitiveArray)
+template genPrimitiveTest(typeArg:typedesc): untyped =
+  genPrimitiveTestAux(typeArg, "primitive layout " & $typeArg & " empty", 0, false, genPrimitiveArray)
+  genPrimitiveTestAux(typeArg, "primitive layout " & $typeArg, 10, true, genPrimitiveArray)
+  genPrimitiveTestAux(typeArg, "primitive layout " & $typeArg & " nulls", 10, true, genPrimitiveArray)
   
 genPrimitiveTest(int16)
 when not defined(skipSlowTests):
