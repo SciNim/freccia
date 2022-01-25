@@ -5,7 +5,7 @@ Apache Arrow implementation in Nim
 
 # TODO
 
-### Basic:
+### Reading:
 - [X] implement Arrow C data interface
 - [X] read ArrowScheme from C interface
 - [X] read numerical data from C ArrowArray
@@ -13,6 +13,7 @@ Apache Arrow implementation in Nim
 - [X] handle null bitmask
 - [X] implement Flatbuffer scheme for metadata
 - [X] parse format string into type + metadata
+- [X] sliced / strided views
 
 ### Layouts:
 - [X] handle fixed-size primitive layout

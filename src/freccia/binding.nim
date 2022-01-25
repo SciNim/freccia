@@ -54,7 +54,9 @@ type
     carray*: CArray
     typeinfo: Type
     # children: seq[ArrowArray]
-    viewStart, viewLen: int
+    offset: int
+    stride: int
+    len: int
 
 
 const 
@@ -71,37 +73,34 @@ const
 proc initArrowArray*(cschema: CSchema, carray: CArray): ArrowArray =
   assert cschema.nChildren == carray.nChildren
   let typeinfo = ($cschema.format).parseType
-  #let children = collect(newSeqOfCap(cschema.nChildren)):
-  #  for i in 0..<cschema.nChildren.int:
-  #    initArrowArray(cschema.children[i][], carray.children[i][])
   result = ArrowArray(
     cschema: cschema, 
     carray: carray, 
     typeinfo: typeinfo,
-    #children: children,
-    viewStart: 0,
-    viewLen: carray.length.int
+    # View on data
+    offset: 0,
+    stride: 1,
+    len: carray.length.int
   )
     
 
-func viewLow(arr: ArrowArray): int = arr.viewStart
-func viewHigh(arr: ArrowArray): int = (arr.viewStart + arr.viewLen) - 1
-func len*(arr: ArrowArray): int = arr.viewLen
+# func viewLow(arr: ArrowArray): int = arr.offset
+# func viewHigh(arr: ArrowArray): int = (arr.offset + arr.len) - 1
+func len*(arr: ArrowArray): int = arr.len
 func low*(arr: ArrowArray): int = 0
 func high*(arr: ArrowArray): int = arr.len - 1
 func `$`*(arr: ArrowArray): string = $arr.cschema & "\n\n" & $arr.carray
 
 
-# proc slice*(arr: ArrowArray, start: int, len: int): ArrowArray =
-#   var copy = arr
-#   copy.viewStart += start
-#   copy.viewLen = len
-#   copy
-proc slice*(arr: ArrowArray, low: int, high: int): ArrowArray =
-  var copy = arr
-  copy.viewStart += low
-  copy.viewLen = min((high-low) + 1, arr.carray.length.int)
-  copy
+proc slice*(arr: ArrowArray, start, stop, step: int): ArrowArray =
+  ArrowArray(
+    cschema: arr.cschema, 
+    carray: arr.carray, 
+    typeinfo: arr.typeinfo,
+    offset: arr.offset + start * arr.stride,
+    stride: arr.stride * step,
+    len: min(((stop-start) div step) + 1, arr.carray.length.int)
+  )
 
 
 # --------------------------------------------------------------
@@ -171,8 +170,7 @@ func layout*(arr: ArrowArray): LayoutKind =
 func validityBuffer*(arr: ArrowArray): openArray[byte] =
   template view(i: int): untyped = 
     cast[ptr UncheckedArray[byte]](arr.carray.bufferList[i]).toOpenArray(0, arr.carray.length.int-1)
-  case arr.layout:
-  of validableLayouts: result = view 0
+  if arr.layout in validableLayouts: result = view 0
   else: raise newException(ValueError, "Layout has no validity buffer")
 
 
@@ -180,8 +178,7 @@ func offsetsBuffer*[T: int32 | int64](arr: ArrowArray): openArray[T] =
   template view(i: int): untyped = 
     # The offsets buffer contains length + 1 signed integers
     cast[ptr UncheckedArray[T]](arr.carray.bufferList[i]).toOpenArray(0, arr.carray.length.int)
-  case arr.layout:
-  of offsettableLayouts: result = view 1
+  if arr.layout in offsettableLayouts: result = view 1
   else: raise newException(ValueError, "Layout has no offsets buffer")
 
 
@@ -226,20 +223,41 @@ func getItem[T](arr: ArrowArray, i: int): T =
     else: err()
 
 
-func item*[T](arr: ArrowArray, i: int): T = arr.getItem[:T](arr.viewStart + i)
-func item*(arr: ArrowArray, i: int, T: typedesc): T = arr.getItem[:T](arr.viewStart + i)
+func item*[T](arr: ArrowArray, i: int): T = arr.getItem[:T](arr.offset + i * arr.stride)
+func item*(arr: ArrowArray, i: int, T: typedesc): T = arr.getItem[:T](arr.offset + i * arr.stride)
 
 
-iterator items*[T](arr: ArrowArray): T = 
-  for i in arr.viewLow..arr.viewHigh: yield arr.getItem[:T](i)
-iterator items*(arr: ArrowArray, T: typedesc): T = 
-  for i in arr.viewLow..arr.viewHigh: yield arr.getItem[:T](i)
+# iterator items*[T](arr: ArrowArray): T = 
+#   for i in arr.viewLow..arr.viewHigh: yield arr.getItem[:T](i)
+# iterator items*(arr: ArrowArray, T: typedesc): T = 
+#   for i in arr.viewLow..arr.viewHigh: yield arr.getItem[:T](i)
+
+iterator items*[T](arr: ArrowArray): T =
+  var cur = arr.offset
+  for _ in 0 ..< arr.len:
+    yield arr.item(cur, T)
+    cur += arr.stride
 
 
 func isValid*(arr: ArrowArray, i: int): bool =
   if arr.carray.nullCount == 0: result = true
   else: 
-    let i = arr.viewStart + i
-    result = (arr.validityBuffer[i div 8] and (1.byte shl (i mod 8))).bool
+    let j = arr.offset + i * arr.stride
+    result = (arr.validityBuffer[j div 8] and (1.byte shl (j mod 8))).bool
 
 # --------------------------------------------------------------
+
+
+# func asPrimitiveView*[T](arr: ArrowArray): View[T] {.inline.} =
+#   assert arr.layout == alPrimitive
+#   arr.dataBuffer[T].toView
+
+
+# func asVariableBinaryView*(arr: ArrowArray): View[View[byte]] {.inline.} =
+#   assert arr.layout == alVariableBinary
+#   let viewSeq = collect(newSeqOfCap(arr.carray.length)):
+#       for item in arr.items(openArray[byte]):
+#         item.toView
+#   result = viewSeq.toOpenArray.toView
+
+  

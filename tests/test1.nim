@@ -1,4 +1,4 @@
-import std/[sugar, random, unittest]
+import std/[sugar, random, unittest, strformat]
 import nimpy
 import nimpy/py_lib
 import freccia
@@ -58,7 +58,7 @@ proc genBinaryArray(size: int, nulls: bool): (PyObject, ArrowArray) =
     cschema: CSchema
     carray: CArray
   for i in 0..<size:
-    discard pylist.append strSet.sample
+    discard pylist.append $i & "_" & strSet.sample
     if nulls: discard pylist.append py.None
   var pyarray = pa.`array`(pylist)
   discard pyarray.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
@@ -116,15 +116,18 @@ test "dtype format parsing":
 
 # https://github.com/apache/arrow/blob/97879eb970bac52d93d2247200b9ca7acf6f3f93/python/pyarrow/tests/test_cffi.py#L109
 # https://github.com/apache/arrow/blob/488f084280fa5e2acea76dcb02dd0c3ee655f55b/python/pyarrow/array.pxi#L1312
-proc genPrimitiveTestAux(T:typedesc, title: string, size: int, nulls: bool) =
-  test title:
-    let
-      sliceLow = size div 4
-      sliceHigh = size div 2
-      (pylist, aarray) = genPrimitiveArray(T, size, nulls)
-      asliced = aarray.slice(sliceLow, sliceHigh)
-      pysliced = pylist[py.callMethod("slice", sliceLow, sliceHigh + 1)]
-    for (aa,pa) in [(aarray, pylist), (asliced, pysliced)]:
+proc genPrimitiveTestAux(T:typedesc, size: int, nulls: bool) =
+  let
+    (pylist, aarray) = genPrimitiveArray(T, size, nulls)
+    sliceStart = int(size.float*0.2)
+    sliceStop = int(size.float*0.8)
+    sliceStep = 2
+    asliced = aarray.slice(sliceStart, sliceStop, sliceStep)
+    pysliced = pylist[py.callMethod("slice", sliceStart, sliceStop + 1, sliceStep)]
+  for (sliceDesc, aa, pa) in [
+    (&"{aarray.low},{aarray.high},1", aarray, pylist), 
+    (&"{sliceStart},{sliceStop},{sliceStep}", asliced, pysliced)]:
+    test &"primitive layout [{$T}] len:{size} slice:[{sliceDesc}]" & (if nulls: " with nulls" else: ""):
       let
         pylen = py.callMethod("len", pa).to(int)
       check aa.len == pylen
@@ -136,16 +139,16 @@ proc genPrimitiveTestAux(T:typedesc, title: string, size: int, nulls: bool) =
           aVal = aa.item(i, T)
         if pyObj == py.None:
           check aVal == 0 # not strictly required
-          check not aarray.isValid(i)
+          check not aa.isValid(i)
         else:
           let pv = pyObj.to(T)
-          check aarray.isValid(i)
+          check aa.isValid(i)
           check pv == aVal # https://github.com/nim-lang/Nim/issues/19426
 
 proc genPrimitiveTest(T: typedesc) =
-  genPrimitiveTestAux(T, "primitive layout " & $T & " empty", 0, false)
-  genPrimitiveTestAux(T, "primitive layout " & $T, 10, true)
-  genPrimitiveTestAux(T, "primitive layout " & $T & " nulls", 10, true)
+  genPrimitiveTestAux(T, 0, false)
+  genPrimitiveTestAux(T, 10, false)
+  genPrimitiveTestAux(T, 10, true)
   
 genPrimitiveTest(int16)
 when not defined(skipSlowTests):
@@ -158,15 +161,18 @@ when not defined(skipSlowTests):
   genPrimitiveTest(float64)
 
 
-proc genVariableBinaryTest(title: string, size: int, nulls: bool) =
-  test title:
-    let
-      sliceLow = size div 4
-      sliceHigh = size div 2
-      (pylist, aarray) = genBinaryArray(size, nulls)
-      asliced = aarray.slice(sliceLow, sliceHigh)
-      pysliced = pylist[py.callMethod("slice", sliceLow, sliceHigh + 1)]
-    for (aa,pa) in [(aarray, pylist), (asliced, pysliced)]:
+proc genVariableBinaryTest(size: int, nulls: bool) =
+  let
+    (pylist, aarray) = genBinaryArray(size, nulls)
+    sliceStart = int(size.float*0.2)
+    sliceStop = int(size.float*0.8)
+    sliceStep = 2
+    asliced = aarray.slice(sliceStart, sliceStop, sliceStep)
+    pysliced = pylist[py.callMethod("slice", sliceStart, sliceStop + 1, sliceStep)]
+  for (sliceDesc, aa, pa) in [
+      (&"{aarray.low},{aarray.high},1", aarray, pylist), 
+      (&"{sliceStart},{sliceStop},{sliceStep}", asliced, pysliced)]:
+    test &"variable binary layout len:{size} slice:[{sliceDesc}]" & (if nulls: " with nulls" else: ""):
       let
         pylen = py.len(pa).to(int)
       check aa.len == pylen
@@ -178,16 +184,29 @@ proc genVariableBinaryTest(title: string, size: int, nulls: bool) =
           blob = aa.item(i, openArray[byte])
         if pyObj == py.None:
           check blob.len == 0
-          check not aarray.isValid(i)
+          check not aa.isValid(i)
         else:
           let pv = pyObj.to(string)
-          check aarray.isValid(i)
+          check aa.isValid(i)
           check pv == blob.toString
 
-genVariableBinaryTest("variable binary layout empty", 0, false)
-genVariableBinaryTest("variable binary layout", 10, false)
-genVariableBinaryTest("variable binary layout nulls", 10, true)
+genVariableBinaryTest(0, false)
+genVariableBinaryTest(10, false)
+genVariableBinaryTest(10, true)
 
+
+# let 
+#   (pylist, aarray) = genBinaryArray(10, false)
+#   pysliced = pylist[py.callMethod("slice", 2, 9, 2)]
+#   asliced = aarray.slice(2,8,2)
+
+# for i in 0..<aarray.len:
+#   echo &"N {i} - {aarray.item(i, openArray[byte]).toString}"
+#   echo &"NP {i} - {pylist[i].to(string)}"
+
+# for i in 0..<asliced.len:
+#   echo &"S {i} - {asliced.item(i, openArray[byte]).toString}"
+#   echo &"NS {i} - {pysliced[i].to(string)}"
 
 
 # # producers TODO
