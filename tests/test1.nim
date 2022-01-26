@@ -10,6 +10,7 @@ pyInitLibPath("/home/jack/.pyenv/versions/3.10.1/lib/libpython3.10.so.1.0")
 let
   py = pyBuiltinsModule()
   pa = pyImport("pyarrow")
+  pyrandom = pyImport("random")
 
 
 
@@ -25,66 +26,54 @@ proc check(cschema: CSchema, dtype: Type) =
   check parseType($cschema.format) == dtype
   
 
-proc check(carray: CArray, dtype: Type, size: int, nulls: bool) =
-  check carray.length == (if nulls: size*2 else: size)
-  check carray.nullCount == (if nulls: size else: 0)
+proc check(carray: CArray, dtype: Type, size: int, nNulls: int) =
+  check carray.length == size
+  check carray.nullCount == nNulls
   check carray.bufferList.len == dtype.layout.expectedBufferCount
   check carray.childrenList.len == 0
 
 
-proc genPrimitiveArray(T: typedesc, size: int, nulls: bool): (PyObject, ArrowArray) =
+proc genArrowArray[T](size: int, nullsRatio: float, generator: proc(i: int): T): (PyObject, ArrowArray) =
   var
-    pylist = py.list()
     cschema: CSchema
     carray: CArray
-  for i in 0..<size:
-    discard pylist.append i.T
-    if nulls: discard pylist.append py.None
+    nNulls = (size.float*nullsRatio).int
+    nValues = size - nNulls
+    pylist = py.list()
+
+  for i in 0..<nValues:
+    discard pylist.append generator(i)
+  for i in 0..<nNulls:
+    discard pylist.append py.None
+  discard pyrandom.callMethod("shuffle", pylist)
+
   var pyarray = pa.`array`(pylist, type=pa.callMethod($T))
   discard pyarray.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
   let dtype = toType(T)
   cschema.check(dtype)
-  carray.check(dtype, size, nulls)
+  carray.check(dtype, size, nNulls)
   (pylist, initArrowArray(cschema, carray))
 
 
-proc genBinaryArray(size: int, nulls: bool): (PyObject, ArrowArray) =
+proc genPrimitiveArray(T: typedesc, size: int, nullsRatio: float): (PyObject, ArrowArray) =
+  genArrowArray(size, nullsRatio, proc(i: int): T = i.T)
+
+
+proc genBinaryArray(size: int, nullsRatio: float): (PyObject, ArrowArray) =
   const strSet = [
     "monkey", "elephant", "dolphin", "tarantula", "Supercalifragilisticexpialidocious", 
     "S̶̢̰̟̙̯͎̰͓̉̾̌͌̔̓͋̎̆͛̅͐͊͜u̴̮̦͇̼͙̦̗͑̐͐̏ͅͅp̴̨̝̮̙̔̚͠ê̸͕̥̿̎͋͑̍̿͝ṙ̴̪̳̮̠͇̱̠̀̎́̓̊̀̀̾̀̓̌̿̚͜ͅc̸̤̗̟͊̏̉͜a̶̧̨̟̗̠̟͖͕͕̣̺͇̙̤͊̑͝ͅl̴̛̫̒̂̆̃͗̐͑̄̍̓́͂̀̚i̴̛͖̾̋͑̎̾̈̏͌̒̿̚̚f̶̡̢͎̳͚̙̣̼͖̱̪̺̬́̀̊͋̉͌̇͋͒̄̿̈́͑̔r̴̨̛̛̗̟̙̅͐̿̓͋ǎ̷̙̰̜̭̠̼͑̋̇̌̐̈́͊̄͛̾͠g̸̢̧̯̗͉̘͎͔̉͒́̚i̸̥͍͈̗͍͍͎̘͌̔͊́̎̈́͋̆̕̕l̶̨̛̯̻̯̺̫̊̄̋̀̿̾̄̿̋ĩ̵̪̰̜̺̖̭͕̄̇͊̑̏̄̀̀̑̈́̍̋̚͝ͅs̵̛͖͚̼̀̂̐͐̚t̸̰̋̃̌̀̿̑͌ì̶̘͇͕̬̫̣̼͆̂̂͛͒̚c̶̢̛̲͉͕̮̩̗̼̱̭̘̳̈̑̌̓͝ę̷̪̰͇̬̿̿̉̃̾͜͠x̷̨̟̱͍̩͈̝̆͊́̑͐̕͜͝͝p̵̧̪̭̥͕̘̟̠̽̆̇̑̌̏̏͆͊̈́̈́̒͂̕͝i̶̧̨̦͖̟̼̮̠̠̤̬̺̙̜̓a̵̯̟̫̣͔̯̭͎̪͚̗̗̣͔͚͐̀͋̆͗̔͂̀̈͘l̶̤͎̞̓̂̊͑ͅḭ̷̫̻̖͚͓̦̻̦̱̭̑ͅd̶͈̾̂̎ò̷̧̢͈͖̹̹̭͓̲̐c̷̢̡̬͖̦̳̹̥͇̲̺͊͌͊̓̀̂̓̆̅ͅị̴̢͙̦̜̟̹̹̮́̀̎͑͒̆̈̎̀̀̂̉̕͜͝͝ơ̸̭̘̫̖̹͕͕̯̑͂̆͊̀́̇̋̋̇̈́̎͘͠ů̶̢̨̜̻̞̟̤̓̑s̶̨͇̦̫͙̞̥̽̊̋͗͋͛͛̈̈́̚̚͘", "丂ひｱ乇尺ᄃﾑﾚﾉｷ尺ﾑムﾉﾚﾉ丂ｲﾉᄃ乇ﾒｱﾉﾑﾚﾉりのᄃﾉのひ丂", 
     "👺☯  Ⓢ𝕦卩ⓔŘc𝐀𝕃ƗⒻℝ卂𝔾Ⓘ𝐋ⒾＳᵗ丨c𝑒𝕩𝔭Ꭵ𝐀Ĺ𝒾𝒹Ỗ𝒸丨𝐨𝔲ᔕ  👽☮"]
-  var
-    pylist = py.list()
-    cschema: CSchema
-    carray: CArray
-  for i in 0..<size:
-    discard pylist.append $i & "_" & strSet.sample
-    if nulls: discard pylist.append py.None
-  var pyarray = pa.`array`(pylist)
-  discard pyarray.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
-  let dtype = (if size > 0: toType(string) else: Type(kind: tkNull))
-  cschema.check(dtype)
-  carray.check(dtype, size, nulls)
-  (pylist, initArrowArray(cschema, carray))
+  genArrowArray(size, nullsRatio, proc(i: int): string = $i & "_" & strSet.sample)
 
 
-proc genVariableListArray(size: int, nulls: bool): (PyObject, ArrowArray) =
+proc genVariableListArray(size: int,  nullsRatio: float): (PyObject, ArrowArray) =
   proc genlist(): PyObject =
-    let pylist = py.list()
-    discard pylist.append 1
-    discard pylist.append 2
-    discard pylist.append 3
-    pylist
-  var
-    pylist = py.list()
-    cschema: CSchema
-    carray: CArray
-  for i in 0..<size:
-    discard pylist.append py.list([genlist(),py.None,genlist()])
-    if nulls: discard pylist.append py.None
-  var pyarray = pa.`array`(pylist)
-  discard pyarray.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
-  (pylist, initArrowArray(cschema, carray))
+    result = py.list()
+    discard result.append 1
+    discard result.append 2
+    discard result.append 3
+  genArrowArray(size, nullsRatio, proc(i: int): PyObject = py.list([genlist(),py.None,genlist()]))
 
 
 proc toString(bytes: openArray[byte]): string =
@@ -116,9 +105,9 @@ test "dtype format parsing":
 
 # https://github.com/apache/arrow/blob/97879eb970bac52d93d2247200b9ca7acf6f3f93/python/pyarrow/tests/test_cffi.py#L109
 # https://github.com/apache/arrow/blob/488f084280fa5e2acea76dcb02dd0c3ee655f55b/python/pyarrow/array.pxi#L1312
-proc genPrimitiveTestAux(T:typedesc, size: int, nulls: bool) =
+proc genPrimitiveTestAux(T:typedesc, size: int, nullsRatio: float) =
   let
-    (pylist, aarray) = genPrimitiveArray(T, size, nulls)
+    (pylist, aarray) = genPrimitiveArray(T, size, nullsRatio)
     sliceStart = int(size.float*0.2)
     sliceStop = int(size.float*0.8)
     sliceStep = 2
@@ -127,7 +116,7 @@ proc genPrimitiveTestAux(T:typedesc, size: int, nulls: bool) =
   for (sliceDesc, aa, pa) in [
     (&"{aarray.low},{aarray.high},1", aarray, pylist), 
     (&"{sliceStart},{sliceStop},{sliceStep}", asliced, pysliced)]:
-    test &"primitive layout [{$T}] len:{size} slice:[{sliceDesc}]" & (if nulls: " with nulls" else: ""):
+    test &"primitive layout [{$T}] len:{size} slice:[{sliceDesc}] nullsRatio:[{nullsRatio}]":
       let
         pylen = py.callMethod("len", pa).to(int)
       check aa.len == pylen
@@ -149,9 +138,9 @@ proc genPrimitiveTestAux(T:typedesc, size: int, nulls: bool) =
           check aVal == pa[i].to(T)
 
 proc genPrimitiveTest(T: typedesc) =
-  genPrimitiveTestAux(T, 0, false)
-  genPrimitiveTestAux(T, 10, false)
-  genPrimitiveTestAux(T, 10, true)
+  genPrimitiveTestAux(T, 0, 0)
+  genPrimitiveTestAux(T, 10, 0)
+  genPrimitiveTestAux(T, 10, 0.5)
   
 genPrimitiveTest(int16)
 when not defined(skipSlowTests):
@@ -164,9 +153,9 @@ when not defined(skipSlowTests):
   genPrimitiveTest(float64)
 
 
-proc genVariableBinaryTest(size: int, nulls: bool) =
+proc genVariableBinaryTest(size: int, nullsRatio: float) =
   let
-    (pylist, aarray) = genBinaryArray(size, nulls)
+    (pylist, aarray) = genBinaryArray(size, nullsRatio)
     sliceStart = int(size.float*0.2)
     sliceStop = int(size.float*0.8)
     sliceStep = 2
@@ -175,7 +164,7 @@ proc genVariableBinaryTest(size: int, nulls: bool) =
   for (sliceDesc, aa, pa) in [
       (&"{aarray.low},{aarray.high},1", aarray, pylist), 
       (&"{sliceStart},{sliceStop},{sliceStep}", asliced, pysliced)]:
-    test &"variable binary layout len:{size} slice:[{sliceDesc}]" & (if nulls: " with nulls" else: ""):
+    test &"variable binary layout len:{size} slice:[{sliceDesc}] nullsRatio:[{nullsRatio}]":
       let
         pylen = py.len(pa).to(int)
       check aa.len == pylen
@@ -196,9 +185,9 @@ proc genVariableBinaryTest(size: int, nulls: bool) =
         if aa.isValid(i):
           check aVal.toString == pa[i].to(string)
 
-genVariableBinaryTest(0, false)
-genVariableBinaryTest(10, false)
-genVariableBinaryTest(10, true)
+genVariableBinaryTest(0, 0)
+genVariableBinaryTest(10, 0)
+genVariableBinaryTest(10, 0.5)
 
 
 # let 

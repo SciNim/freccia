@@ -4,4 +4,4 @@
 --experimental:views
 --experimental:strictFuncs
 
---d:skipSlowTests
+# --d:skipSlowTests

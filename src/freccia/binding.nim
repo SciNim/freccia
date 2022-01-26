@@ -106,7 +106,7 @@ proc slice*(arr: ArrowArray, start, stop, step: int): ArrowArray =
 # --------------------------------------------------------------
 
 
-template toType*(T: typedesc): Type =
+func toType*(T: typedesc): Type =
   when T is int16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: true))
   elif T is int32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: true))
   elif T is int64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: true))
@@ -116,7 +116,7 @@ template toType*(T: typedesc): Type =
   elif T is float32: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pSingle))
   elif T is float64: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pDouble))
   elif T is string: Type(kind: tkUtf8, utf8Meta: Utf8())
-  else: {.error.}
+  else: raise newException(ValueError, "Unhandled type")
 
 
 func `==`*(a: Type, b: Type): bool =
