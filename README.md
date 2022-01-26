@@ -22,7 +22,7 @@ Apache Arrow implementation in Nim
 ### Layouts:
 - [X] handle fixed-size primitive layout
 - [X] handle variable-size binary Layout
-- [ ] handle variable-size List layout
+- [X] handle variable-size List layout
 - [ ] handle fixed-size list layout
 - [ ] handle struct layout
 - [ ] handle dense union layout
@@ -35,12 +35,12 @@ Apache Arrow implementation in Nim
 - [X] Int
 - [X] FloatingPoint
 - [X] Binary
-- [ ] LargeBinary
+- [!] LargeBinary
 - [X] Utf8
-- [ ] LargeUtf8
+- [!] LargeUtf8
 - [X] Bool
-- [ ] List
-- [ ] LargeList
+- [X] List
+- [!] LargeList
 - [ ] FixedSizeList
 - [ ] FixedSizeBinary
 - [ ] Decimal

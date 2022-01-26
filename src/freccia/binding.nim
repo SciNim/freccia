@@ -52,7 +52,7 @@ type
   ArrowArray* = object
     cschema: CSchema
     carray*: CArray
-    typeinfo: Type
+    logicalType: Type
     # children: seq[ArrowArray]
     offset: int
     stride: int
@@ -72,11 +72,11 @@ const
 
 proc initArrowArray*(cschema: CSchema, carray: CArray): ArrowArray =
   assert cschema.nChildren == carray.nChildren
-  let typeinfo = ($cschema.format).parseType
+  let logicalType = ($cschema.format).parseType
   result = ArrowArray(
     cschema: cschema, 
     carray: carray, 
-    typeinfo: typeinfo,
+    logicalType: logicalType,
     # View on data
     offset: 0,
     stride: 1,
@@ -84,39 +84,41 @@ proc initArrowArray*(cschema: CSchema, carray: CArray): ArrowArray =
   )
     
 
-# func viewLow(arr: ArrowArray): int = arr.offset
-# func viewHigh(arr: ArrowArray): int = (arr.offset + arr.len) - 1
+func logicalType*(arr: ArrowArray): Type = arr.logicalType
 func len*(arr: ArrowArray): int = arr.len
 func low*(arr: ArrowArray): int = 0
 func high*(arr: ArrowArray): int = arr.len - 1
 func `$`*(arr: ArrowArray): string = $arr.cschema & "\n\n" & $arr.carray
 
 
+proc getChild(arr: ArrowArray, i: int): ArrowArray =
+  initArrowArray(arr.cschema.childrenList[i][], arr.carray.childrenList[i][])
+
+
 proc slice*(arr: ArrowArray, start, stop, step: int): ArrowArray =
   ArrowArray(
     cschema: arr.cschema, 
     carray: arr.carray, 
-    typeinfo: arr.typeinfo,
+    logicalType: arr.logicalType,
     offset: arr.offset + start * arr.stride,
     stride: arr.stride * step,
     len: min(((stop-start) div step) + 1, arr.carray.length.int)
   )
 
-
 # --------------------------------------------------------------
 
 
-func toType*(T: typedesc): Type =
-  when T is int16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: true))
-  elif T is int32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: true))
-  elif T is int64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: true))
-  elif T is uint16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: false))
-  elif T is uint32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: false))
-  elif T is uint64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: false))
-  elif T is float32: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pSingle))
-  elif T is float64: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pDouble))
-  elif T is string: Type(kind: tkUtf8, utf8Meta: Utf8())
-  else: raise newException(ValueError, "Unhandled type")
+# func toLogicalType*(T: typedesc): Type =
+#   when T is int16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: true))
+#   elif T is int32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: true))
+#   elif T is int64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: true))
+#   elif T is uint16: Type(kind:tkInt, intMeta: Int(bitWidth:16, isSigned: false))
+#   elif T is uint32: Type(kind:tkInt, intMeta: Int(bitWidth:32, isSigned: false))
+#   elif T is uint64: Type(kind:tkInt, intMeta: Int(bitWidth:64, isSigned: false))
+#   elif T is float32: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pSingle))
+#   elif T is float64: Type(kind:tkFloatingPoint, floatingPointMeta: FloatingPoint(precision:pDouble))
+#   elif T is string: Type(kind: tkUtf8, utf8Meta: Utf8())
+#   else: raise newException(ValueError, "Unhandled type")
 
 
 func `==`*(a: Type, b: Type): bool =
@@ -161,7 +163,7 @@ func layout*(dtype: Type): LayoutKind =
 
 
 func layout*(arr: ArrowArray): LayoutKind =
-  arr.typeinfo.layout
+  arr.logicalType.layout
 
 
 # --------------------------------------------------------------
@@ -191,7 +193,7 @@ func dataBuffer*[T](arr: ArrowArray): openArray[T] =
   case arr.layout:
   of alPrimitive: result = view(1, arr.carray.length.int-1)
   of alVariableBinary: 
-    case arr.typeinfo.kind
+    case arr.logicalType.kind
     of tkBinary, tkUtf8: result = view(2, arr.offsetsBuffer[:int32][^1].int)
     of tkLargeBinary, tkLargeUtf8: result = view(2, arr.offsetsBuffer[:int64][^1].int)
     else: err()
@@ -203,25 +205,37 @@ func dataBuffer*[T](arr: ArrowArray): openArray[T] =
 
 func getItem[T](arr: ArrowArray, i: int): T =
 
-  func offsetView(arr: ArrowArray, T: typedesc, i: int): openArray[byte] =
+  func byteOffsetView(arr: ArrowArray, T: typedesc, i: int): openArray[byte] =
     let
       offsets = arr.offsetsBuffer[:T]
       slotStart = offsets[i]
       slotEnd = offsets[i+1] - 1
     result = arr.dataBuffer[:byte].toOpenArray(slotStart.int, slotEnd.int)
 
+  func itemOffsetView(arr: ArrowArray, T: typedesc, i: int): ArrowArray =
+    let
+      offsets = arr.offsetsBuffer[:T]
+      slotStart = offsets[i]
+      slotEnd = offsets[i+1] - 1
+    result = arr.getChild(0).slice(slotStart.int, slotEnd.int, 1)
+
   template err = raise newException(ValueError, "Unable to get item")
 
   when T is openArray[byte]:
-    if arr.layout == alVariableBinary:
-      case arr.typeinfo.kind
-      of tkBinary, tkUtf8: result = arr.offsetView(int32, i)
-      of tkLargeBinary, tkLargeUtf8: result = arr.offsetView(int64, i)
-      else: err()
+    assert arr.layout == alVariableBinary
+    case arr.logicalType.kind
+    of tkBinary, tkUtf8: result = arr.byteOffsetView(int32, i)
+    of tkLargeBinary, tkLargeUtf8: result = arr.byteOffsetView(int64, i)
+    else: err()
+  elif T is ArrowArray:
+    assert arr.layout == alVariableList
+    case arr.logicalType.kind
+    of tkList: result = arr.itemOffsetView(int32, i)
+    of tkLargeList: result = arr.itemOffsetView(int64, i)
     else: err()
   else:
-    if arr.layout == alPrimitive:
-      result = arr.dataBuffer[:T][i]
+    case arr.layout
+    of alPrimitive: result = arr.dataBuffer[:T][i]
     else: err()
 
 
@@ -249,20 +263,5 @@ func isValid*(arr: ArrowArray, i: int): bool =
   else: 
     let j = arr.offset + i * arr.stride
     result = (arr.validityBuffer[j div 8] and (1.byte shl (j mod 8))).bool
-
-# --------------------------------------------------------------
-
-
-# func asPrimitiveView*[T](arr: ArrowArray): View[T] {.inline.} =
-#   assert arr.layout == alPrimitive
-#   arr.dataBuffer[T].toView
-
-
-# func asVariableBinaryView*(arr: ArrowArray): View[View[byte]] {.inline.} =
-#   assert arr.layout == alVariableBinary
-#   let viewSeq = collect(newSeqOfCap(arr.carray.length)):
-#       for item in arr.items(openArray[byte]):
-#         item.toView
-#   result = viewSeq.toOpenArray.toView
 
   

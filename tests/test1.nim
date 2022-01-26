@@ -3,7 +3,25 @@ import nimpy
 import nimpy/py_lib
 import freccia
 
+
+type TestTuple = tuple[pylist: PyObject, aarray: ArrowArray]
+
 randomize(987)
+
+
+# ------------------------------------------------------------------
+
+
+converter toString(bytes: openArray[byte]): string =
+  if bytes.len > 0:
+    result = newString(bytes.len)
+    copyMem(result[0].addr, bytes[0].unsafeAddr, bytes.len)
+  else:
+    result = ""
+
+
+# ------------------------------------------------------------------
+
 
 # Tests rely on pyarrow
 pyInitLibPath("/home/jack/.pyenv/versions/3.10.1/lib/libpython3.10.so.1.0")
@@ -22,18 +40,53 @@ func expectedBufferCount(l: LayoutKind): int =
     of alVariableBinary: 3
 
 
-proc check(cschema: CSchema, dtype: Type) =
-  check parseType($cschema.format) == dtype
-  
+func expectedChildrenCount(l: LayoutKind): int =
+  case l
+    of alVariableList: 1
+    else: 0
 
-proc check(carray: CArray, dtype: Type, size: int, nNulls: int) =
+
+proc check(carray: CArray, logicalType: Type, size: int, nNulls: int) =
   check carray.length == size
   check carray.nullCount == nNulls
-  check carray.bufferList.len == dtype.layout.expectedBufferCount
-  check carray.childrenList.len == 0
+  check carray.bufferList.len == logicalType.layout.expectedBufferCount
+  check carray.childrenList.len == logicalType.layout.expectedChildrenCount
 
 
-proc genArrowArray[T](size: int, nullsRatio: float, generator: proc(i: int): T): (PyObject, ArrowArray) =
+proc check[T,J](arr: ArrowArray, pylist: PyObject) =
+  let pylen = py.callMethod("len", pylist).to(int)
+  check arr.len == pylen
+  check arr.low == 0
+  check arr.high == pylen-1
+
+  case arr.logicalType.kind
+  of tkList, tkLargeList: # checking recursively
+    for i in 0..<pylen:
+      let  pyItem = pylist[i]
+      if pyItem == py.None:
+        check not arr.isValid(i)
+      else:
+        check arr.isValid(i)
+        check[T,J](arr.item(i, ArrowArray), pyItem)
+  else:
+    for i in 0..<pylen:
+      let 
+        pyItem = pylist[i]
+        aItem = arr.item(i, T)
+      if pyItem == py.None:
+        check not arr.isValid(i)
+      else:
+        check arr.isValid(i)
+        check aItem == pyItem.to(J) # https://github.com/nim-lang/Nim/issues/19426
+    for i, aVal in enumerate arr.items(T):
+      if arr.isValid(i):
+        check aVal == pylist[i].to(J)
+
+
+# ----------------------------------------------------------------------
+
+
+proc genArrowArray[T](size: int, nullsRatio: float, generator: proc(i: int): T, pyarrowType: PyObject): TestTuple =
   var
     cschema: CSchema
     carray: CArray
@@ -47,41 +100,54 @@ proc genArrowArray[T](size: int, nullsRatio: float, generator: proc(i: int): T):
     discard pylist.append py.None
   discard pyrandom.callMethod("shuffle", pylist)
 
-  var pyarray = pa.`array`(pylist, type=pa.callMethod($T))
+  var pyarray = pa.`array`(pylist, type=pyarrowType)
   discard pyarray.callMethod("_export_to_c", cast[int](carray.addr), cast[int](cschema.addr))
-  let dtype = toType(T)
-  cschema.check(dtype)
-  carray.check(dtype, size, nNulls)
+  let logicalType = parseType($cschema.format)
+  carray.check(logicalType, size, nNulls)
   (pylist, initArrowArray(cschema, carray))
 
 
-proc genPrimitiveArray(T: typedesc, size: int, nullsRatio: float): (PyObject, ArrowArray) =
-  genArrowArray(size, nullsRatio, proc(i: int): T = i.T)
+proc genPrimitiveArray(T: typedesc, size: int, nullsRatio: float): TestTuple =
+  proc generator(i: int): T = i.T
+  genArrowArray(size, nullsRatio, generator, pa.callMethod($T))
 
 
-proc genBinaryArray(size: int, nullsRatio: float): (PyObject, ArrowArray) =
+proc genBinaryArray(size: int, nullsRatio: float): TestTuple =
   const strSet = [
     "monkey", "elephant", "dolphin", "tarantula", "Supercalifragilisticexpialidocious", 
     "S̶̢̰̟̙̯͎̰͓̉̾̌͌̔̓͋̎̆͛̅͐͊͜u̴̮̦͇̼͙̦̗͑̐͐̏ͅͅp̴̨̝̮̙̔̚͠ê̸͕̥̿̎͋͑̍̿͝ṙ̴̪̳̮̠͇̱̠̀̎́̓̊̀̀̾̀̓̌̿̚͜ͅc̸̤̗̟͊̏̉͜a̶̧̨̟̗̠̟͖͕͕̣̺͇̙̤͊̑͝ͅl̴̛̫̒̂̆̃͗̐͑̄̍̓́͂̀̚i̴̛͖̾̋͑̎̾̈̏͌̒̿̚̚f̶̡̢͎̳͚̙̣̼͖̱̪̺̬́̀̊͋̉͌̇͋͒̄̿̈́͑̔r̴̨̛̛̗̟̙̅͐̿̓͋ǎ̷̙̰̜̭̠̼͑̋̇̌̐̈́͊̄͛̾͠g̸̢̧̯̗͉̘͎͔̉͒́̚i̸̥͍͈̗͍͍͎̘͌̔͊́̎̈́͋̆̕̕l̶̨̛̯̻̯̺̫̊̄̋̀̿̾̄̿̋ĩ̵̪̰̜̺̖̭͕̄̇͊̑̏̄̀̀̑̈́̍̋̚͝ͅs̵̛͖͚̼̀̂̐͐̚t̸̰̋̃̌̀̿̑͌ì̶̘͇͕̬̫̣̼͆̂̂͛͒̚c̶̢̛̲͉͕̮̩̗̼̱̭̘̳̈̑̌̓͝ę̷̪̰͇̬̿̿̉̃̾͜͠x̷̨̟̱͍̩͈̝̆͊́̑͐̕͜͝͝p̵̧̪̭̥͕̘̟̠̽̆̇̑̌̏̏͆͊̈́̈́̒͂̕͝i̶̧̨̦͖̟̼̮̠̠̤̬̺̙̜̓a̵̯̟̫̣͔̯̭͎̪͚̗̗̣͔͚͐̀͋̆͗̔͂̀̈͘l̶̤͎̞̓̂̊͑ͅḭ̷̫̻̖͚͓̦̻̦̱̭̑ͅd̶͈̾̂̎ò̷̧̢͈͖̹̹̭͓̲̐c̷̢̡̬͖̦̳̹̥͇̲̺͊͌͊̓̀̂̓̆̅ͅị̴̢͙̦̜̟̹̹̮́̀̎͑͒̆̈̎̀̀̂̉̕͜͝͝ơ̸̭̘̫̖̹͕͕̯̑͂̆͊̀́̇̋̋̇̈́̎͘͠ů̶̢̨̜̻̞̟̤̓̑s̶̨͇̦̫͙̞̥̽̊̋͗͋͛͛̈̈́̚̚͘", "丂ひｱ乇尺ᄃﾑﾚﾉｷ尺ﾑムﾉﾚﾉ丂ｲﾉᄃ乇ﾒｱﾉﾑﾚﾉりのᄃﾉのひ丂", 
     "👺☯  Ⓢ𝕦卩ⓔŘc𝐀𝕃ƗⒻℝ卂𝔾Ⓘ𝐋ⒾＳᵗ丨c𝑒𝕩𝔭Ꭵ𝐀Ĺ𝒾𝒹Ỗ𝒸丨𝐨𝔲ᔕ  👽☮"]
-  genArrowArray(size, nullsRatio, proc(i: int): string = $i & "_" & strSet.sample)
+  proc generator(i: int): string = $i & "_" & strSet.sample
+  genArrowArray(size, nullsRatio, generator, pa.callMethod("string"))
 
 
-proc genVariableListArray(size: int,  nullsRatio: float): (PyObject, ArrowArray) =
-  proc genlist(): PyObject =
-    result = py.list()
-    discard result.append 1
-    discard result.append 2
-    discard result.append 3
-  genArrowArray(size, nullsRatio, proc(i: int): PyObject = py.list([genlist(),py.None,genlist()]))
+proc genVariableListArray[T](size: int,  nullsRatio: float, levels: int): TestTuple =
+  doAssert levels > 0
+  
+  proc genlist(level: int): PyObject =
+    if level == 1:
+      let (pylist, _) = genPrimitiveArray(T, size, nullsRatio)
+      pylist
+    else:
+      py.list([genlist(level-1),genlist(level-1),genlist(level-1)])
+  
+  proc typeGenerator(level: int): PyObject =
+    if level == 0: pa.callMethod($T)
+    else: pa.callMethod("list_", typeGenerator(level-1))
+  
+  proc generator(i: int): PyObject = genlist(levels)
+  
+  genArrowArray(size, nullsRatio, generator, typeGenerator(levels))
 
 
-proc toString(bytes: openArray[byte]): string =
-  if bytes.len > 0:
-    result = newString(bytes.len)
-    copyMem(result[0].addr, bytes[0].unsafeAddr, bytes.len)
-  else:
-    result = ""
+# ------------------------------------------------------------------
+
+
+proc slice(testTuple: TestTuple, start, stop, step: int): (TestTuple) =
+  let
+    (pylist, aarray) = testTuple
+  (pylist: pylist[py.callMethod("slice", start, stop + 1, step)],
+   aarray: aarray.slice(start, stop, step))
 
 
 # ------------------------------------------------------------------
@@ -103,105 +169,89 @@ test "dtype format parsing":
   check parseType("+ud:123,2,31,4000,5123") == Type(kind: tkUnion, unionMeta: Union(mode: umDense, typeIds: @[123.int32, 2, 31, 4000, 5123]))
 
 
+# ------------------------------------------------------------------
+
+
 # https://github.com/apache/arrow/blob/97879eb970bac52d93d2247200b9ca7acf6f3f93/python/pyarrow/tests/test_cffi.py#L109
 # https://github.com/apache/arrow/blob/488f084280fa5e2acea76dcb02dd0c3ee655f55b/python/pyarrow/array.pxi#L1312
-proc genPrimitiveTestAux(T:typedesc, size: int, nullsRatio: float) =
+proc genPrimitiveTest(T:typedesc, size: int, nullsRatio: float) =
   let
-    (pylist, aarray) = genPrimitiveArray(T, size, nullsRatio)
-    sliceStart = int(size.float*0.2)
-    sliceStop = int(size.float*0.8)
-    sliceStep = 2
-    asliced = aarray.slice(sliceStart, sliceStop, sliceStep)
-    pysliced = pylist[py.callMethod("slice", sliceStart, sliceStop + 1, sliceStep)]
-  for (sliceDesc, aa, pa) in [
+    tt = genPrimitiveArray(T, size, nullsRatio)
+    (pylist, aarray) = tt
+    start = int(size.float*0.2)
+    stop = int(size.float*0.8)
+    step = 2
+    (pysliced, asliced) = tt.slice(start, stop, step)
+  for (sliceDesc, aarray, pylist) in [
     (&"{aarray.low},{aarray.high},1", aarray, pylist), 
-    (&"{sliceStart},{sliceStop},{sliceStep}", asliced, pysliced)]:
-    test &"primitive layout [{$T}] len:{size} slice:[{sliceDesc}] nullsRatio:[{nullsRatio}]":
-      let
-        pylen = py.callMethod("len", pa).to(int)
-      check aa.len == pylen
-      check aa.low == 0
-      check aa.high == pylen-1
-      for i in 0..pylen-1:
-        let 
-          pyObj = pa[i]
-          aVal = aa.item(i, T)
-        if pyObj == py.None:
-          check aVal == 0 # not strictly required
-          check not aa.isValid(i)
-        else:
-          let pv = pyObj.to(T)
-          check aa.isValid(i)
-          check pv == aVal # https://github.com/nim-lang/Nim/issues/19426
-      for i, aVal in enumerate aa.items(T):
-        if aa.isValid(i):
-          check aVal == pa[i].to(T)
+    (&"{start},{stop},{step}", asliced, pysliced)]:
+    test &"primitive layout [{$T}] len:[{size}] slice:[{sliceDesc}] nullsRatio:[{nullsRatio}]":
+      check[T,T](aarray, pylist)
 
-proc genPrimitiveTest(T: typedesc) =
-  genPrimitiveTestAux(T, 0, 0)
-  genPrimitiveTestAux(T, 10, 0)
-  genPrimitiveTestAux(T, 10, 0.5)
+proc genPrimitiveTestAux(T: typedesc) =
+  genPrimitiveTest(T, 0, 0)
+  genPrimitiveTest(T, 10, 0)
+  genPrimitiveTest(T, 10, 0.5)
   
-genPrimitiveTest(int16)
+genPrimitiveTestAux(int16)
 when not defined(skipSlowTests):
-  genPrimitiveTest(int32)
-  genPrimitiveTest(int64)
-  genPrimitiveTest(uint16)
-  genPrimitiveTest(uint32)
-  genPrimitiveTest(uint64)
-  genPrimitiveTest(float32)
-  genPrimitiveTest(float64)
+  genPrimitiveTestAux(int32)
+  genPrimitiveTestAux(int64)
+  genPrimitiveTestAux(uint16)
+  genPrimitiveTestAux(uint32)
+  genPrimitiveTestAux(uint64)
+  genPrimitiveTestAux(float32)
+  genPrimitiveTestAux(float64)
 
 
 proc genVariableBinaryTest(size: int, nullsRatio: float) =
   let
-    (pylist, aarray) = genBinaryArray(size, nullsRatio)
-    sliceStart = int(size.float*0.2)
-    sliceStop = int(size.float*0.8)
-    sliceStep = 2
-    asliced = aarray.slice(sliceStart, sliceStop, sliceStep)
-    pysliced = pylist[py.callMethod("slice", sliceStart, sliceStop + 1, sliceStep)]
-  for (sliceDesc, aa, pa) in [
-      (&"{aarray.low},{aarray.high},1", aarray, pylist), 
-      (&"{sliceStart},{sliceStop},{sliceStep}", asliced, pysliced)]:
-    test &"variable binary layout len:{size} slice:[{sliceDesc}] nullsRatio:[{nullsRatio}]":
-      let
-        pylen = py.len(pa).to(int)
-      check aa.len == pylen
-      check aa.low == 0
-      check aa.high == pylen-1
-      for i in 0..pylen-1:
-        let 
-          pyObj = pa[i]
-          blob = aa.item(i, openArray[byte])
-        if pyObj == py.None:
-          check blob.len == 0
-          check not aa.isValid(i)
-        else:
-          let pv = pyObj.to(string)
-          check aa.isValid(i)
-          check pv == blob.toString
-      for i, aVal in enumerate aa.items(openArray[byte]):
-        if aa.isValid(i):
-          check aVal.toString == pa[i].to(string)
+    tt = genBinaryArray(size, nullsRatio)
+    (pylist, aarray) = tt
+    start = int(size.float*0.2)
+    stop = int(size.float*0.8)
+    step = 2
+    (pysliced, asliced) = tt.slice(start, stop, step)
+  for (sliceDesc, aarray, pylist) in [
+    (&"{aarray.low},{aarray.high},1", aarray, pylist), 
+    (&"{start},{stop},{step}", asliced, pysliced)]:
+    test &"variable binary layout len:[{size}] slice:[{sliceDesc}] nullsRatio:[{nullsRatio}]":
+      check[openArray[byte],string](aarray, pylist)
 
 genVariableBinaryTest(0, 0)
 genVariableBinaryTest(10, 0)
 genVariableBinaryTest(10, 0.5)
 
 
-# let 
-#   (pylist, aarray) = genBinaryArray(10, false)
-#   pysliced = pylist[py.callMethod("slice", 2, 9, 2)]
-#   asliced = aarray.slice(2,8,2)
 
-# for i in 0..<aarray.len:
-#   echo &"N {i} - {aarray.item(i, openArray[byte]).toString}"
-#   echo &"NP {i} - {pylist[i].to(string)}"
+proc genVariableListTest[T](size: int, nullsRatio: float, levels: int) =
+  let
+    tt = genVariableListArray[T](size, nullsRatio, levels)
+    (pylist, aarray) = tt
+    start = int(size.float*0.2)
+    stop = int(size.float*0.8)
+    step = 2
+    (pysliced, asliced) = tt.slice(start, stop, step)
+  for (sliceDesc, aarray, pylist) in [
+    (&"{aarray.low},{aarray.high},1", aarray, pylist), 
+    (&"{start},{stop},{step}", asliced, pysliced)]:
+    test &"variable list array layout [{$T}] len:[{size}] slice:[{sliceDesc}] nullsRatio:[{nullsRatio}] levels:[{levels}]":
+      check[T,T](aarray, pylist)
 
-# for i in 0..<asliced.len:
-#   echo &"S {i} - {asliced.item(i, openArray[byte]).toString}"
-#   echo &"NS {i} - {pysliced[i].to(string)}"
+proc genVariableListTestAux[T] =
+  for levels in 1..3:
+    genVariableListTest[T](0, 0, levels)
+    genVariableListTest[T](10, 0, levels)
+    genVariableListTest[T](10, 0.5, levels)
+
+genVariableListTestAux[int16]()
+genVariableListTestAux[int32]()
+genVariableListTestAux[int64]()
+genVariableListTestAux[uint16]()
+genVariableListTestAux[uint32]()
+genVariableListTestAux[uint64]()
+genVariableListTestAux[float32]()
+genVariableListTestAux[float64]()
 
 
 # # producers TODO
