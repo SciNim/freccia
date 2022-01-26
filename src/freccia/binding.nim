@@ -168,18 +168,20 @@ func layout*(arr: ArrowArray): LayoutKind =
 
 
 func validityBuffer*(arr: ArrowArray): openArray[byte] =
+  template err = raise newException(ValueError, "Layout has no data buffer")
   template view(i: int): untyped = 
     cast[ptr UncheckedArray[byte]](arr.carray.bufferList[i]).toOpenArray(0, arr.carray.length.int-1)
   if arr.layout in validableLayouts: result = view 0
-  else: raise newException(ValueError, "Layout has no validity buffer")
+  else: err()
 
 
 func offsetsBuffer*[T: int32 | int64](arr: ArrowArray): openArray[T] =
+  template err = raise newException(ValueError, "Layout has no offsets buffer")
   template view(i: int): untyped = 
     # The offsets buffer contains length + 1 signed integers
     cast[ptr UncheckedArray[T]](arr.carray.bufferList[i]).toOpenArray(0, arr.carray.length.int)
   if arr.layout in offsettableLayouts: result = view 1
-  else: raise newException(ValueError, "Layout has no offsets buffer")
+  else: err()
 
 
 func dataBuffer*[T](arr: ArrowArray): openArray[T] =
@@ -226,16 +228,19 @@ func getItem[T](arr: ArrowArray, i: int): T =
 func item*[T](arr: ArrowArray, i: int): T = arr.getItem[:T](arr.offset + i * arr.stride)
 func item*(arr: ArrowArray, i: int, T: typedesc): T = arr.getItem[:T](arr.offset + i * arr.stride)
 
+when false:
+  # https://github.com/nim-lang/Nim/issues/19453
+  iterator items*[T](arr: ArrowArray): T =
+    var cur = arr.offset
+    for _ in 0..<arr.len:
+      yield arr.getItem[:T](cur)
+      cur += arr.stride
 
-# iterator items*[T](arr: ArrowArray): T = 
-#   for i in arr.viewLow..arr.viewHigh: yield arr.getItem[:T](i)
-# iterator items*(arr: ArrowArray, T: typedesc): T = 
-#   for i in arr.viewLow..arr.viewHigh: yield arr.getItem[:T](i)
 
-iterator items*[T](arr: ArrowArray): T =
+iterator items*(arr: ArrowArray, T: typedesc): T =
   var cur = arr.offset
-  for _ in 0 ..< arr.len:
-    yield arr.item(cur, T)
+  for _ in 0..<arr.len:
+    yield arr.getItem[:T](cur)
     cur += arr.stride
 
 

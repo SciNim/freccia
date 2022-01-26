@@ -1,4 +1,4 @@
-import std/[sugar, random, unittest, strformat]
+import std/[unittest, sugar, random, enumerate, strformat]
 import nimpy
 import nimpy/py_lib
 import freccia
@@ -144,6 +144,9 @@ proc genPrimitiveTestAux(T:typedesc, size: int, nulls: bool) =
           let pv = pyObj.to(T)
           check aa.isValid(i)
           check pv == aVal # https://github.com/nim-lang/Nim/issues/19426
+      for i, aVal in enumerate aa.items(T):
+        if aa.isValid(i):
+          check aVal == pa[i].to(T)
 
 proc genPrimitiveTest(T: typedesc) =
   genPrimitiveTestAux(T, 0, false)
@@ -189,6 +192,9 @@ proc genVariableBinaryTest(size: int, nulls: bool) =
           let pv = pyObj.to(string)
           check aa.isValid(i)
           check pv == blob.toString
+      for i, aVal in enumerate aa.items(openArray[byte]):
+        if aa.isValid(i):
+          check aVal.toString == pa[i].to(string)
 
 genVariableBinaryTest(0, false)
 genVariableBinaryTest(10, false)
