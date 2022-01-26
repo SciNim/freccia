@@ -29,3 +29,26 @@ Apache Arrow implementation in Nim
 - [ ] handle sparse union layout
 - [ ] handle null layout
 - [ ] handle dictionary-encoded layout
+
+### Types:
+- [X] Null
+- [X] Int
+- [X] FloatingPoint
+- [X] Binary
+- [ ] LargeBinary
+- [X] Utf8
+- [ ] LargeUtf8
+- [X] Bool
+- [ ] List
+- [ ] LargeList
+- [ ] FixedSizeList
+- [ ] FixedSizeBinary
+- [ ] Decimal
+- [ ] Date
+- [ ] Time
+- [ ] Timestamp
+- [ ] Interval
+- [ ] Duration
+- [ ] Struct
+- [ ] Union
+- [ ] Map
